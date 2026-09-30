@@ -1,0 +1,72 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'frontend' do
+  config = use_native_modules!
+
+  pod 'GoogleUtilities', :modular_headers => true
+  pod 'RecaptchaInterop', :modular_headers => true
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |build_config|
+        current_target = build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if current_target.nil? || Gem::Version.new(current_target) < Gem::Version.new(min_ios_version_supported)
+          build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = min_ios_version_supported
+        end
+      end
+    end
+
+    # Read ARTHA_GOOGLE_IOS_CLIENT_ID from ../.env.production and ../.env.local and inject reversed URL scheme into gitignored Pods xcconfigs
+    ios_client_id = ''
+    ['.env.production', '.env.local'].each do |env_file|
+      env_path = File.join(__dir__, '..', env_file)
+      next unless File.exist?(env_path)
+      File.readlines(env_path).each do |line|
+        stripped = line.strip
+        next if stripped.empty? || stripped.start_with?('#')
+        key, val = stripped.split('=', 2)
+        if key && key.strip == 'ARTHA_GOOGLE_IOS_CLIENT_ID' && val
+          cleaned = val.strip.gsub(/\A['"]|['"]\z/, '')
+          ios_client_id = cleaned unless cleaned.empty?
+        end
+      end
+    end
+
+    if ios_client_id.end_with?('.apps.googleusercontent.com')
+      prefix = ios_client_id.sub(/\.apps\.googleusercontent\.com\z/, '')
+      reversed_scheme = "com.googleusercontent.apps.#{prefix}"
+      Dir.glob(File.join(__dir__, 'Pods', 'Target Support Files', 'Pods-frontend', 'Pods-frontend.*.xcconfig')).each do |xcconfig_path|
+        content = File.read(xcconfig_path)
+        content.gsub!(/^ARTHA_IOS_REVERSED_CLIENT_ID\s*=.*$/, '')
+        File.write(xcconfig_path, "#{content.rstrip}\nARTHA_IOS_REVERSED_CLIENT_ID = #{reversed_scheme}\n")
+      end
+    end
+  end
+end
