@@ -53,7 +53,9 @@ export type IconName =
   | 'moon'
   | 'help'
   | 'trash'
-  | 'smartphone';
+  | 'smartphone'
+  | 'fingerprint'
+  | 'biometric';
 
 interface IconProps {
   name: IconName;
@@ -1013,6 +1015,51 @@ export const Icon: React.FC<IconProps> = ({ name, size = 20, color = '#FFFFFF' }
               }}
             />
           </View>
+        </View>
+      );
+
+    case 'fingerprint':
+    case 'biometric':
+      return (
+        <View style={[styles.center, { width: s, height: s }]}>
+          {/* Outer fingerprint arch */}
+          <View
+            style={{
+              position: 'absolute',
+              width: s * 0.88,
+              height: s * 0.88,
+              borderRadius: (s * 0.88) / 2,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderBottomColor: 'transparent',
+              transform: [{ rotate: '-12deg' }],
+            }}
+          />
+          {/* Middle fingerprint arch */}
+          <View
+            style={{
+              position: 'absolute',
+              width: s * 0.62,
+              height: s * 0.64,
+              borderRadius: (s * 0.62) / 2,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderBottomColor: 'transparent',
+              borderLeftColor: 'transparent',
+              transform: [{ rotate: '14deg' }],
+            }}
+          />
+          {/* Inner fingerprint core */}
+          <View
+            style={{
+              width: s * 0.34,
+              height: s * 0.44,
+              borderRadius: (s * 0.34) / 2,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderBottomColor: 'transparent',
+            }}
+          />
         </View>
       );
 

@@ -24,6 +24,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ToastProvider, toast } from './src/context/ToastContext';
 import { AuthFlowNavigator } from './src/screens/auth/AuthFlowNavigator';
 import { AppLockScreen } from './src/screens/auth/AppLockScreen';
+import { BiometricOnboardingScreen } from './src/screens/auth/BiometricOnboardingScreen';
 
 function AppContent() {
   const insets = useSafeAreaInsets();
@@ -137,6 +138,22 @@ function AppContent() {
             }
             isSplashActive={showSplash}
           />
+        </Animated.View>
+      );
+    }
+
+    if (status === 'onboarding_biometrics') {
+      return (
+        <Animated.View
+          style={[
+            styles.screenPage,
+            {
+              opacity: bodyFadeAnim,
+              transform: [{ translateX: bodySlideX }],
+            },
+          ]}
+        >
+          <BiometricOnboardingScreen />
         </Animated.View>
       );
     }
