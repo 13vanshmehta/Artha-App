@@ -704,49 +704,76 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
               <View style={styles.settingInfo}>
                 <Text style={styles.settingTitle}>Active Protection Mode</Text>
                 <Text style={styles.settingSub}>
-                  {biometricEnabled || pinEnabled
-                    ? `${formatPlatformBiometryLabel(supportedBiometry)} & ${
-                        Platform.OS === 'ios' ? 'Device Passcode' : 'Device PIN'
-                      } (System Default)`
-                    : 'Off (No local lock enabled)'}
+                  {!supportedBiometry
+                    ? 'Unavailable on this device (No hardware or enrollment)'
+                    : biometricEnabled || pinEnabled
+                      ? `${formatPlatformBiometryLabel(supportedBiometry)} & ${
+                          Platform.OS === 'ios'
+                            ? 'Device Passcode'
+                            : 'Device PIN'
+                        } (System Default)`
+                      : 'Off (No local lock enabled)'}
                 </Text>
               </View>
             </View>
 
             {/* Section A — System Biometric & Device PIN Unlock */}
             <Text style={styles.sectionLabel}>
-              {Platform.OS === 'ios'
-                ? `System ${formatPlatformBiometryLabel(supportedBiometry)} & Passcode`
-                : 'System Fingerprint / Face & Device PIN'}
+              {supportedBiometry
+                ? Platform.OS === 'ios'
+                  ? `System ${formatPlatformBiometryLabel(supportedBiometry)} & Passcode`
+                  : 'System Fingerprint / Face & Device PIN'
+                : 'Biometric Unlock'}
             </Text>
             <View style={styles.sectionGroup}>
               <View style={styles.settingRow}>
                 <View style={styles.iconBox}>
-                  <Icon name="shield" size={19} color={colors.navyPrimary} />
+                  <Icon
+                    name={supportedBiometry ? 'shield' : 'info'}
+                    size={19}
+                    color={colors.navyPrimary}
+                  />
                 </View>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingTitle}>
-                    {Platform.OS === 'ios'
-                      ? `System ${formatPlatformBiometryLabel(supportedBiometry)} & Passcode`
-                      : 'System Fingerprint / Face & Device PIN'}
+                    {supportedBiometry
+                      ? Platform.OS === 'ios'
+                        ? `System ${formatPlatformBiometryLabel(supportedBiometry)} & Passcode`
+                        : 'System Fingerprint / Face & Device PIN'
+                      : 'Biometric Authentication'}
                   </Text>
                   <Text style={styles.settingSub}>
-                    {Platform.OS === 'ios'
-                      ? 'Uses your iPhone’s built-in Face ID (or Touch ID) and native device passcode'
-                      : 'Uses your Android device’s built-in Fingerprint, Face Unlock, or screen lock PIN'}
+                    {supportedBiometry
+                      ? Platform.OS === 'ios'
+                        ? 'Uses your iPhone’s built-in Face ID (or Touch ID) and native device passcode'
+                        : 'Uses your Android device’s built-in Fingerprint, Face Unlock, or screen lock PIN'
+                      : 'Biometric hardware is not available or not enrolled on this device.'}
                   </Text>
                 </View>
-                <Switch
-                  value={biometricEnabled || pinEnabled}
-                  onValueChange={handleToggleBiometrics}
-                  disabled={busyAction === 'biometric'}
-                  trackColor={{
-                    false: '#CBD5E1',
-                    true: colors.bluePrimary,
-                  }}
-                  thumbColor={colors.white}
-                  testID="toggle-biometrics-switch"
-                />
+                {supportedBiometry ? (
+                  <Switch
+                    value={biometricEnabled || pinEnabled}
+                    onValueChange={handleToggleBiometrics}
+                    disabled={busyAction === 'biometric'}
+                    trackColor={{
+                      false: '#CBD5E1',
+                      true: colors.bluePrimary,
+                    }}
+                    thumbColor={colors.white}
+                    testID="toggle-biometrics-switch"
+                  />
+                ) : (
+                  <View style={[styles.statusBadge, styles.statusBadgeNeutral]}>
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        styles.statusBadgeTextNeutral,
+                      ]}
+                    >
+                      Unavailable
+                    </Text>
+                  </View>
+                )}
               </View>
 
               <View style={styles.settingRow}>

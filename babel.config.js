@@ -25,9 +25,12 @@ function isSafePublicEnvKey(key) {
 function loadDotEnvFiles() {
   const envVars = {};
   const isProd = process.env.NODE_ENV === 'production';
-  const files = isProd
-    ? ['.env', '.env.local', '.env.production']
-    : ['.env', '.env.production', '.env.local'];
+  const isTest = process.env.NODE_ENV === 'test';
+  const files = isTest
+    ? ['.env.local']
+    : isProd
+      ? ['.env.production']
+      : ['.env.development', '.env.local'];
 
   for (const filename of files) {
     const filePath = path.resolve(__dirname, filename);
@@ -54,7 +57,7 @@ function loadDotEnvFiles() {
       }
       if (isSafePublicEnvKey(key)) {
         envVars[key] = value;
-        if (process.env.NODE_ENV !== 'test' && !process.env[key]) {
+        if (!process.env[key]) {
           process.env[key] = value;
         }
       }

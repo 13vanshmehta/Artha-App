@@ -43,9 +43,9 @@ target 'frontend' do
       end
     end
 
-    # Read ARTHA_GOOGLE_IOS_CLIENT_ID from ../.env.production and ../.env.local and inject reversed URL scheme into gitignored Pods xcconfigs
+    # Read ARTHA_GOOGLE_IOS_CLIENT_ID from ../.env.production, ../.env.development, and ../.env.local and inject reversed URL scheme into gitignored Pods xcconfigs
     ios_client_id = ''
-    ['.env.production', '.env.local'].each do |env_file|
+    ['.env.production', '.env.development', '.env.local'].each do |env_file|
       env_path = File.join(__dir__, '..', env_file)
       next unless File.exist?(env_path)
       File.readlines(env_path).each do |line|

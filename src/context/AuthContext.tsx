@@ -29,6 +29,7 @@ export type AuthLifecycleStatus =
   | 'initializing'
   | 'unauthenticated'
   | 'pending_verification'
+  | 'onboarding_biometrics'
   | 'locked'
   | 'authenticated';
 
@@ -103,6 +104,8 @@ export interface AuthContextValue {
   lockNow: () => void;
   fetchSecurityPreferences: () => Promise<SecurityPreferencesDetails>;
   toggleBiometrics: (enable: boolean) => Promise<void>;
+  completeBiometricOnboarding: (enable: boolean) => Promise<void>;
+  skipBiometricOnboarding: () => Promise<void>;
   configurePin: (params: {
     enable: boolean;
     newPin?: string;
@@ -205,7 +208,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       apiClient.setInMemorySession(stored);
 
-      // Refresh if access token is expired or expiring within 30s
+      // Immediately activate cached session so the app transitions out of 'initializing'
+      // in milliseconds, preventing any hang on the splash screen in offline mode
+      if (mounted) {
+        setUser(stored.user);
+        setCurrentSessionId(stored.sessionId);
+      }
+
+      const initialLockState = await secureStorage.loadAppLockState(
+        stored.user.id,
+      );
+      const initialShouldLock = Boolean(
+        stored.user.securityPreferences?.biometricEnabled ||
+          stored.user.securityPreferences?.pinEnabled ||
+          initialLockState?.biometricEnabled ||
+          initialLockState?.pinEnabled,
+      );
+
+      if (mounted) {
+        setStatus(initialShouldLock ? 'locked' : 'authenticated');
+      }
+
+      // Background session refresh & verification with a fast 3s timeout
       let activeSession = stored;
       if (stored.accessTokenExpiresAt <= Date.now() + 30_000) {
         const refreshed = await apiClient.coordinateTokenRefresh();
@@ -219,7 +243,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         const meRes = await apiClient.request<{
           user: StoredUserSummary;
           currentSessionId: string;
-        }>('/auth/me', { method: 'GET' });
+        }>('/auth/me', { method: 'GET', timeoutMs: 3000 });
 
         const updatedStored: StoredAuthSession = {
           ...activeSession,
@@ -306,12 +330,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [status, user]);
 
   const applySessionPayload = useCallback(
-    async (payload: AuthSessionApiPayload) => {
+    async (
+      payload: AuthSessionApiPayload,
+      options?: { checkOnboarding?: boolean },
+    ) => {
       const stored = await apiClient.persistSessionFromApi(payload);
       setUser(stored.user);
       setCurrentSessionId(stored.sessionId);
       setPendingVerificationEmail(null);
       setIsOfflineBannerVisible(false);
+
+      if (options?.checkOnboarding) {
+        const biometry = await secureStorage.getSupportedBiometryType();
+        const onboardingStatus =
+          await secureStorage.getBiometricOnboardingStatus(stored.user.id);
+
+        if (biometry && onboardingStatus === 'not_asked') {
+          setStatus('onboarding_biometrics');
+          return;
+        }
+
+        if (!biometry && onboardingStatus === 'not_asked') {
+          await secureStorage.setBiometricOnboardingStatus(
+            stored.user.id,
+            'unavailable',
+          );
+        }
+      }
+
       setStatus('authenticated');
     },
     [],
@@ -394,7 +440,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           },
         },
       );
-      await applySessionPayload(payload);
+      await applySessionPayload(payload, { checkOnboarding: true });
     },
     [applySessionPayload],
   );
@@ -452,7 +498,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         },
       },
     );
-    await applySessionPayload(payload);
+    const isNewAccount =
+      Date.now() - new Date(payload.user.createdAt).getTime() < 120_000;
+    await applySessionPayload(payload, { checkOnboarding: isNewAccount });
     return { cancelled: false };
   }, [applySessionPayload]);
 
@@ -480,7 +528,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         },
       },
     );
-    await applySessionPayload(payload);
+    const isNewAccount =
+      Date.now() - new Date(payload.user.createdAt).getTime() < 120_000;
+    await applySessionPayload(payload, { checkOnboarding: isNewAccount });
     return { cancelled: false };
   }, [applySessionPayload]);
 
@@ -685,10 +735,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           60,
       });
 
+      await secureStorage.setBiometricOnboardingStatus(
+        user.id,
+        enable ? 'enabled' : 'skipped',
+      );
+
       await refreshProfile();
     },
     [currentSessionId, refreshProfile, user],
   );
+
+  const completeBiometricOnboarding = useCallback(
+    async (enable: boolean) => {
+      if (!user || !currentSessionId) {
+        setStatus('authenticated');
+        return;
+      }
+      if (enable) {
+        await toggleBiometrics(true);
+        await secureStorage.setBiometricOnboardingStatus(user.id, 'enabled');
+      } else {
+        await secureStorage.setBiometricOnboardingStatus(user.id, 'skipped');
+      }
+      setStatus('authenticated');
+    },
+    [currentSessionId, toggleBiometrics, user],
+  );
+
+  const skipBiometricOnboarding = useCallback(async () => {
+    if (user) {
+      await secureStorage.setBiometricOnboardingStatus(user.id, 'skipped');
+    }
+    setStatus('authenticated');
+  }, [user]);
 
   const configurePin = useCallback(
     async (params: {
@@ -940,6 +1019,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       lockNow,
       fetchSecurityPreferences,
       toggleBiometrics,
+      completeBiometricOnboarding,
+      skipBiometricOnboarding,
       configurePin,
       linkSocialProvider,
       unlinkSocialProvider,
@@ -977,6 +1058,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       lockNow,
       fetchSecurityPreferences,
       toggleBiometrics,
+      completeBiometricOnboarding,
+      skipBiometricOnboarding,
       configurePin,
       linkSocialProvider,
       unlinkSocialProvider,

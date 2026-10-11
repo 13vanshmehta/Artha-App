@@ -1,34 +1,28 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
-  Text,
   ScrollView,
   RefreshControl,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
 import { colors } from '../theme/colors';
-import { spacing } from '../theme/spacing';
-import { AppHeader } from '../components/common/AppHeader';
-import { HeroCard } from '../components/cards/HeroCard';
-import { SummarySection } from '../components/cards/SummaryStatCard';
-import { QuickActionsBar } from '../components/cards/QuickActionsBar';
-import { DonutChart } from '../components/charts/DonutChart';
-import { BarChart } from '../components/charts/BarChart';
-import { DualToneExpenseCard } from '../components/cards/DualToneExpenseCard';
-import { RecentExpensesContainer } from '../components/cards/RecentExpenseItem';
-import { GroupsSection } from '../components/cards/GroupCard';
+import { HomeHeader } from '../components/home/HomeHeader';
 import {
-  mockSummary,
-  mockCategories,
-  mockGroups,
-  mockMonthlyTrends,
-  ExpenseItem,
-} from '../data/mockData';
+  TotalExpensesHeroCard,
+  ExpensePeriod,
+} from '../components/home/TotalExpensesHeroCard';
+import { RecentExpensesCard } from '../components/home/RecentExpensesCard';
+import { SpendingOverviewCard } from '../components/home/SpendingOverviewCard';
+import { AddExpenseModal } from '../components/expenses/AddExpenseModal';
+import { ExpenseItem, mockMonthlyTrends } from '../data/mockData';
+import { toast } from '../context/ToastContext';
 
 interface HomeScreenProps {
   expenses: ExpenseItem[];
+  userName?: string | null;
+  onAddExpense?: (expense: Omit<ExpenseItem, 'id'>) => void;
   onOpenAddExpense?: () => void;
   onReplaySplash?: () => void;
   onScrollingChange?: (isScrolling: boolean) => void;
@@ -36,17 +30,60 @@ interface HomeScreenProps {
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   expenses,
+  userName,
+  onAddExpense,
   onOpenAddExpense,
   onReplaySplash,
   onScrollingChange,
 }) => {
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedPeriod, setSelectedPeriod] = useState<ExpensePeriod>('This month');
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [showAllExpenses, setShowAllExpenses] = useState(false);
+
+  const scrollViewRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const overviewCardYRef = useRef(0);
   const lastOffsetY = useRef(0);
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const featuredDualToneExpenses = expenses.slice(0, 2);
-  const recentListExpenses = expenses.slice(0, 5);
+  // Dynamic Total Spending calculated from actual expense records
+  const totalSpent = useMemo(() => {
+    return expenses
+      .filter((e) => e.type === 'expense')
+      .reduce((sum, item) => sum + item.amount, 0);
+  }, [expenses]);
+
+  // Derived Monthly Trend Data with current month dynamically matched to total spending
+  const dynamicMonthlyTrends = useMemo(() => {
+    return mockMonthlyTrends.map((item, index) => {
+      if (index === mockMonthlyTrends.length - 1) {
+        return {
+          ...item,
+          amount: totalSpent > 0 ? totalSpent : item.amount,
+          isCurrent: true,
+        };
+      }
+      return item;
+    });
+  }, [totalSpent]);
+
+  // Displayed recent transactions (top 5 by default, or all if toggled)
+  const displayedExpenses = useMemo(() => {
+    if (showAllExpenses) {
+      return expenses;
+    }
+    return expenses.slice(0, 5);
+  }, [expenses, showAllExpenses]);
+
+  // Period cycle handler
+  const handleCyclePeriod = useCallback(() => {
+    setSelectedPeriod((prev) => {
+      if (prev === 'This month') return 'This week';
+      if (prev === 'This week') return 'All time';
+      return 'This month';
+    });
+  }, []);
 
   const showBottomNav = useCallback(() => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
@@ -74,14 +111,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     const currentY = contentOffset.y;
     const diff = currentY - lastOffsetY.current;
 
-    // Top / Pull-to-refresh zone: Keep bottom bar 100% sticky
+    // Top / Pull-to-refresh zone: Keep bottom bar 100% visible
     if (currentY <= 20) {
       showBottomNav();
       lastOffsetY.current = currentY;
       return;
     }
 
-    // Scrolled to bottom: Immediately appear and stay visible
+    // Bottom reached: Make bottom bar visible
     const isAtBottom = currentY + layoutMeasurement.height >= contentSize.height - 40;
     if (isAtBottom) {
       showBottomNav();
@@ -89,15 +126,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       return;
     }
 
-    // Scrolling down (towards top): Appear immediately and STICK!
+    // Scrolling down (towards top): Appear immediately
     if (diff < -6) {
       showBottomNav();
     }
-    // Scrolling up: hide while in active motion, but reappear as soon as scroll up is done
+    // Scrolling up: hide while scrolling, but reappear as soon as scroll finishes
     else if (diff > 8 && currentY > 50) {
       onScrollingChange?.(true);
 
-      // Reappear as soon as scrolling up finishes
       if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
       scrollIdleTimer.current = setTimeout(() => {
         onScrollingChange?.(false);
@@ -118,9 +154,40 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     showBottomNav();
   };
 
+  // Open Add Expense modal sheet
+  const handleOpenAddExpense = useCallback(() => {
+    setIsAddModalVisible(true);
+  }, []);
+
+  // Save new expense
+  const handleSaveExpense = useCallback((newExpense: Omit<ExpenseItem, 'id'>) => {
+    if (onAddExpense) {
+      onAddExpense(newExpense);
+    } else if (onOpenAddExpense) {
+      onOpenAddExpense();
+    }
+  }, [onAddExpense, onOpenAddExpense]);
+
+  // Scroll smoothly down to the Spending Overview chart
+  const handleScrollToBreakdown = useCallback(() => {
+    if (overviewCardYRef.current > 0) {
+      scrollViewRef.current?.scrollTo({
+        y: overviewCardYRef.current - 20,
+        animated: true,
+      });
+    } else {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }
+  }, []);
+
+  const handleExportOrFilter = useCallback(() => {
+    toast.info('Export report generated for current period.', 'Export Expenses');
+  }, []);
+
   return (
     <View style={styles.screen}>
       <ScrollView
+        ref={scrollViewRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         onScroll={handleScroll}
@@ -136,66 +203,62 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           />
         }
       >
-        {/* App Header: scrolls with content (not sticky), never blocks pull-to-refresh */}
-        <AppHeader onLogoPress={onReplaySplash} />
-
-        {/* 1. Hero Card */}
-        <HeroCard
-          totalSpent={mockSummary.totalSpent}
-          periodLabel={mockSummary.periodLabel}
-          changePercent={mockSummary.spentChangePercent}
-          onAddExpense={onOpenAddExpense}
+        {/* 1. Header: Artha logo, greeting, and notification/menu circular buttons */}
+        <HomeHeader
+          userName={userName}
+          onLogoPress={onReplaySplash}
+          onNotificationPress={() => toast.info('No new notifications.', 'Notifications')}
+          onMenuPress={() => toast.info('Options menu coming soon.', 'Options')}
         />
 
-        {/* 2. Monthly Summary Section */}
-        <SummarySection
-          income={mockSummary.income}
-          expenses={mockSummary.expenses}
-          remaining={mockSummary.remaining}
+        {/* 2. Main Balance Card (Hero Total Expenses Card with Radial Glow) */}
+        <TotalExpensesHeroCard
+          totalSpent={totalSpent}
+          selectedPeriod={selectedPeriod}
+          onPeriodPress={handleCyclePeriod}
+          changePercent={-8.4}
+          changeAmountDiff={-1286}
+          onAddExpense={handleOpenAddExpense}
+          onBreakdownPress={handleScrollToBreakdown}
+          onExportPress={handleExportOrFilter}
         />
 
-        {/* 3. Quick Actions */}
-        <QuickActionsBar onAddExpense={onOpenAddExpense} />
-
-        {/* 4. Spending Breakdown Donut Chart */}
-        <DonutChart
-          categories={mockCategories}
-          totalSpent={mockSummary.totalSpent}
+        {/* 3. Recent Transactions Section (Top Holdings inspired by Reference) */}
+        <RecentExpensesCard
+          expenses={displayedExpenses}
+          onSeeAllPress={() => setShowAllExpenses((prev) => !prev)}
+          onAddExpensePress={handleOpenAddExpense}
+          onItemPress={(item) =>
+            toast.info(
+              `${item.merchant} • ₹${item.amount} via ${item.paymentMethod}`,
+              item.category,
+            )
+          }
         />
 
-        {/* 5. Featured Dual-Tone Expense Cards */}
-        <View style={styles.featuredSection}>
-          <View style={styles.sectionHeaderRow}>
-            <View>
-              <Text style={styles.sectionTitle}>Featured Transactions</Text>
-              <Text style={styles.sectionSubtitle}>
-                Recent high-impact expenses
-              </Text>
-            </View>
-          </View>
-
-          {featuredDualToneExpenses.map((exp) => (
-            <DualToneExpenseCard key={exp.id} item={exp} />
-          ))}
+        {/* 4. Spending Overview Dual-Tone Stacked Bar Chart */}
+        <View
+          onLayout={(event) => {
+            overviewCardYRef.current = event.nativeEvent.layout.y;
+          }}
+        >
+          <SpendingOverviewCard
+            data={dynamicMonthlyTrends}
+            title="Spending Overview"
+            subtitle="Monthly breakdown"
+          />
         </View>
-
-        {/* 6. Recent Expenses List Container */}
-        <RecentExpensesContainer expenses={recentListExpenses} />
-
-        {/* 7. Collaborative Shared Groups */}
-        <GroupsSection groups={mockGroups} />
-
-        {/* 8. Monthly Trends Bar Chart */}
-        <BarChart
-          data={mockMonthlyTrends}
-          title="Spending Trend"
-          subtitle="Monthly analytics view"
-          isDarkTheme={true}
-        />
 
         {/* Bottom spacer for floating navigation bar */}
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* Lightweight Functional Expense Entry Flow Bottom Sheet */}
+      <AddExpenseModal
+        visible={isAddModalVisible}
+        onClose={() => setIsAddModalVisible(false)}
+        onSave={handleSaveExpense}
+      />
     </View>
   );
 };
@@ -207,27 +270,6 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingBottom: 40,
-  },
-  featuredSection: {
-    paddingHorizontal: spacing.xl,
-    marginTop: spacing.xl,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.navyPrimary,
-    letterSpacing: -0.3,
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 1,
   },
   bottomSpacer: {
     height: 100,

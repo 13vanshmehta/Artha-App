@@ -24,11 +24,12 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ToastProvider, toast } from './src/context/ToastContext';
 import { AuthFlowNavigator } from './src/screens/auth/AuthFlowNavigator';
 import { AppLockScreen } from './src/screens/auth/AppLockScreen';
+import { BiometricOnboardingScreen } from './src/screens/auth/BiometricOnboardingScreen';
 
 function AppContent() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
-  const { status, isOfflineBannerVisible } = useAuth();
+  const { status, user, isOfflineBannerVisible } = useAuth();
 
   const [showSplash, setShowSplash] = useState(true);
   const [currentTab, setCurrentTab] = useState<TabKey>('Home');
@@ -141,6 +142,22 @@ function AppContent() {
       );
     }
 
+    if (status === 'onboarding_biometrics') {
+      return (
+        <Animated.View
+          style={[
+            styles.screenPage,
+            {
+              opacity: bodyFadeAnim,
+              transform: [{ translateX: bodySlideX }],
+            },
+          ]}
+        >
+          <BiometricOnboardingScreen />
+        </Animated.View>
+      );
+    }
+
     if (status === 'locked') {
       return <AppLockScreen />;
     }
@@ -187,6 +204,8 @@ function AppContent() {
             >
               <HomeScreen
                 expenses={expenses}
+                userName={user?.displayName}
+                onAddExpense={handleAddExpense}
                 onOpenAddExpense={() =>
                   handleAddExpense({
                     merchant: 'New Expense',
@@ -250,7 +269,7 @@ function AppContent() {
       <ToastHost />
 
       {/* Launch & Replay Splash Screen */}
-      {(showSplash || status === 'initializing') && (
+      {showSplash && (
         <SplashScreen
           isReady={status !== 'initializing'}
           skipFadeOut={status === 'unauthenticated' || status === 'locked'}
