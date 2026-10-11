@@ -29,7 +29,7 @@ import { BiometricOnboardingScreen } from './src/screens/auth/BiometricOnboardin
 function AppContent() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
-  const { status, isOfflineBannerVisible } = useAuth();
+  const { status, user, isOfflineBannerVisible } = useAuth();
 
   const [showSplash, setShowSplash] = useState(true);
   const [currentTab, setCurrentTab] = useState<TabKey>('Home');
@@ -204,6 +204,8 @@ function AppContent() {
             >
               <HomeScreen
                 expenses={expenses}
+                userName={user?.displayName}
+                onAddExpense={handleAddExpense}
                 onOpenAddExpense={() =>
                   handleAddExpense({
                     merchant: 'New Expense',
@@ -267,7 +269,7 @@ function AppContent() {
       <ToastHost />
 
       {/* Launch & Replay Splash Screen */}
-      {(showSplash || status === 'initializing') && (
+      {showSplash && (
         <SplashScreen
           isReady={status !== 'initializing'}
           skipFadeOut={status === 'unauthenticated' || status === 'locked'}

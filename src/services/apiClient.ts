@@ -108,11 +108,13 @@ export class ArthaApiClient {
       method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
       body?: unknown;
       authenticated?: boolean;
+      timeoutMs?: number;
       _retried?: boolean;
     } = {},
   ): Promise<T> {
     const method = options.method ?? 'GET';
     const authenticated = options.authenticated ?? true;
+    const timeoutMs = options.timeoutMs ?? 10_000;
 
     let currentSession = this.inMemorySession;
     if (authenticated && !currentSession) {
@@ -149,10 +151,20 @@ export class ArthaApiClient {
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     };
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
     let response: Response | null = null;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, requestInit);
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...requestInit,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
     } catch (primaryErr) {
+      clearTimeout(timer);
       const isJest = Boolean((globalThis as Record<string, unknown>).jest);
       if (typeof __DEV__ !== 'undefined' && __DEV__ && !isJest) {
         const fallbackBaseUrls = [
@@ -163,10 +175,16 @@ export class ArthaApiClient {
 
         for (const fallbackUrl of fallbackBaseUrls) {
           try {
-            const fallbackResp = await fetch(
-              `${fallbackUrl}${path}`,
-              requestInit,
+            const fallbackController = new AbortController();
+            const fallbackTimer = setTimeout(
+              () => fallbackController.abort(),
+              1_500,
             );
+            const fallbackResp = await fetch(`${fallbackUrl}${path}`, {
+              ...requestInit,
+              signal: fallbackController.signal,
+            });
+            clearTimeout(fallbackTimer);
             this.baseUrl = fallbackUrl;
             response = fallbackResp;
             break;
@@ -272,6 +290,9 @@ export class ArthaApiClient {
       return null;
     }
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4_000);
+
     try {
       const response = await fetch(`${this.baseUrl}/auth/token/refresh`, {
         method: 'POST',
@@ -280,7 +301,9 @@ export class ArthaApiClient {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ refreshToken: current.refreshToken }),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
       if (!response.ok) {
         await this.invalidateLocalSession('REFRESH_REJECTED');
@@ -290,6 +313,7 @@ export class ArthaApiClient {
       const payload = (await response.json()) as AuthSessionApiPayload;
       return await this.persistSessionFromApi(payload);
     } catch {
+      clearTimeout(timer);
       // Transient network error during refresh: do not wipe stored credentials, return null for now
       return null;
     }

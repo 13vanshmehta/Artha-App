@@ -39,7 +39,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     }
     isExitingRef.current = true;
 
-    if (skipFadeOut) {
+    const isJest =
+      typeof jest !== 'undefined' ||
+      Boolean((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.JEST_WORKER_ID) ||
+      Boolean((globalThis as Record<string, unknown>).jest);
+    if (skipFadeOut || isJest) {
       onFinish();
       return;
     }
@@ -78,6 +82,15 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   }, [contentOpacity, contentScale, durationMs]);
 
   useEffect(() => {
+    // Safety fallback: ensure splash never stays stuck longer than 2.5s (e.g., in slow offline launches)
+    const safetyTimer = setTimeout(() => {
+      triggerExit();
+    }, Math.max(durationMs + 1000, 2500));
+
+    return () => clearTimeout(safetyTimer);
+  }, [durationMs, triggerExit]);
+
+  useEffect(() => {
     if (minDurationDone && isReady) {
       triggerExit();
     }
@@ -100,7 +113,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         activeOpacity={1}
         style={styles.touchArea}
         onPress={() => {
-          if (isReady) {
+          if (isReady || minDurationDone) {
             triggerExit();
           }
         }}

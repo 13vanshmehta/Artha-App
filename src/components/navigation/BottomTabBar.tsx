@@ -30,38 +30,37 @@ interface TabIconProps {
 const TabIcon: React.FC<TabIconProps> = ({
   tab,
   color,
-  isActive,
   size = 18,
 }) => {
   if (tab === 'Home') {
-    const doorBg = isActive ? '#243F68' : '#172B47';
     return (
       <View style={[styles.iconBox, { width: size, height: size }]}>
-        {/* Modern bold roof apex */}
+        {/* Precision gable roof with symmetric eaves overhang */}
         <View
           style={[
-            styles.homeRoofSolid,
+            styles.homeRoof,
             {
-              backgroundColor: color,
+              borderBottomColor: color,
             },
           ]}
         />
-        {/* Modern bold house body */}
-        <View
-          style={[
-            styles.homeBodySolid,
-            {
-              backgroundColor: color,
-            },
-          ]}
-        >
-          {/* Arched doorway cutout */}
+        {/* House body with natural transparent doorway opening */}
+        <View style={styles.homeBody}>
           <View
             style={[
-              styles.homeDoorCutout,
-              {
-                backgroundColor: doorBg,
-              },
+              styles.homeWall,
+              styles.homeWallLeft,
+              { backgroundColor: color },
+            ]}
+          />
+          <View style={styles.homeDoorway}>
+            <View style={[styles.homeLintel, { backgroundColor: color }]} />
+          </View>
+          <View
+            style={[
+              styles.homeWall,
+              styles.homeWallRight,
+              { backgroundColor: color },
             ]}
           />
         </View>
@@ -69,12 +68,12 @@ const TabIcon: React.FC<TabIconProps> = ({
     );
   }
 
-  // Account - Modern bold person glyph
+  // Account - Refined modern person glyph
   return (
     <View style={[styles.iconBox, { width: size, height: size }]}>
       <View
         style={[
-          styles.accountHeadSolid,
+          styles.accountHead,
           {
             backgroundColor: color,
           },
@@ -82,7 +81,7 @@ const TabIcon: React.FC<TabIconProps> = ({
       />
       <View
         style={[
-          styles.accountShouldersSolid,
+          styles.accountShoulders,
           {
             backgroundColor: color,
           },
@@ -209,17 +208,14 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
               <TabIcon
                 tab={tab.key}
                 color={isActive ? activeColor : inactiveColor}
-                size={18}
+                size={17}
                 isActive={isActive}
               />
 
               <Text
                 style={[
                   styles.tabLabel,
-                  {
-                    color: isActive ? activeColor : inactiveColor,
-                    fontWeight: isActive ? '700' : '600',
-                  },
+                  isActive ? styles.tabLabelActive : styles.tabLabelInactive,
                 ]}
               >
                 {tab.label}
@@ -281,51 +277,75 @@ const styles = StyleSheet.create({
     marginTop: 3,
     letterSpacing: 0.25,
   },
+  tabLabelActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  tabLabelInactive: {
+    color: '#8EA5C4',
+    fontWeight: '600',
+  },
   iconBox: {
     width: 18,
     height: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Modern bold Home
-  homeRoofSolid: {
-    position: 'absolute',
-    top: 0.5,
-    width: 12.5,
-    height: 12.5,
-    borderRadius: 2,
-    transform: [{ rotate: '45deg' }],
+  // Precision Home architectural glyph
+  homeRoof: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 7.5,
+    borderRightWidth: 7.5,
+    borderBottomWidth: 6.2,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    marginBottom: 0.5,
   },
-  homeBodySolid: {
-    position: 'absolute',
-    bottom: 0.5,
-    width: 15.5,
-    height: 9.8,
-    borderBottomLeftRadius: 3,
-    borderBottomRightRadius: 3,
+  homeBody: {
+    width: 12,
+    height: 7,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  homeWall: {
+    width: 3.5,
+    height: 7,
+  },
+  homeWallLeft: {
+    borderBottomLeftRadius: 1.5,
+  },
+  homeWallRight: {
+    borderBottomRightRadius: 1.5,
+  },
+  homeDoorway: {
+    width: 5,
+    height: 7,
     alignItems: 'center',
-    justifyContent: 'flex-end',
   },
-  homeDoorCutout: {
-    width: 4.8,
-    height: 5.6,
-    borderTopLeftRadius: 2.4,
-    borderTopRightRadius: 2.4,
+  homeLintel: {
+    width: 5,
+    height: 1.8,
+    borderBottomLeftRadius: 1,
+    borderBottomRightRadius: 1,
   },
-  // Modern bold Account
-  accountHeadSolid: {
-    width: 7.5,
-    height: 7.5,
-    borderRadius: 3.75,
+  // Precision Account avatar glyph
+  accountHead: {
+    width: 5.4,
+    height: 5.4,
+    borderRadius: 2.7,
   },
-  accountShouldersSolid: {
-    width: 15.5,
-    height: 7.8,
-    borderTopLeftRadius: 7.8,
-    borderTopRightRadius: 7.8,
-    borderBottomLeftRadius: 2,
-    borderBottomRightRadius: 2,
-    marginTop: 2,
+  accountShoulders: {
+    width: 12,
+    height: 6.2,
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
+    borderBottomLeftRadius: 1.5,
+    borderBottomRightRadius: 1.5,
+    marginTop: 1.8,
   },
 });
 

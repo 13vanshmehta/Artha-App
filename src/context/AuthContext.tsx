@@ -208,7 +208,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       apiClient.setInMemorySession(stored);
 
-      // Refresh if access token is expired or expiring within 30s
+      // Immediately activate cached session so the app transitions out of 'initializing'
+      // in milliseconds, preventing any hang on the splash screen in offline mode
+      if (mounted) {
+        setUser(stored.user);
+        setCurrentSessionId(stored.sessionId);
+      }
+
+      const initialLockState = await secureStorage.loadAppLockState(
+        stored.user.id,
+      );
+      const initialShouldLock = Boolean(
+        stored.user.securityPreferences?.biometricEnabled ||
+          stored.user.securityPreferences?.pinEnabled ||
+          initialLockState?.biometricEnabled ||
+          initialLockState?.pinEnabled,
+      );
+
+      if (mounted) {
+        setStatus(initialShouldLock ? 'locked' : 'authenticated');
+      }
+
+      // Background session refresh & verification with a fast 3s timeout
       let activeSession = stored;
       if (stored.accessTokenExpiresAt <= Date.now() + 30_000) {
         const refreshed = await apiClient.coordinateTokenRefresh();
@@ -222,7 +243,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         const meRes = await apiClient.request<{
           user: StoredUserSummary;
           currentSessionId: string;
-        }>('/auth/me', { method: 'GET' });
+        }>('/auth/me', { method: 'GET', timeoutMs: 3000 });
 
         const updatedStored: StoredAuthSession = {
           ...activeSession,
