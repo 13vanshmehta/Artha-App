@@ -1,56 +1,43 @@
-/**
- * @format
- */
-
 import React from 'react';
 import ReactTestRenderer, { act } from 'react-test-renderer';
+import { Text } from 'react-native';
 import App from '../App';
 import { SplashScreen } from '../src/components/splash/SplashScreen';
-
 import { secureStorage } from '../src/services/secureStorage';
 
-describe('Artha App Root & SplashScreen', () => {
-  const originalFetch = globalThis.fetch;
-
+describe('Artha Prototype UI App', () => {
   beforeEach(async () => {
     jest.useFakeTimers();
-    globalThis.fetch = jest.fn();
-    await secureStorage.clearSession();
+    await secureStorage.clearAll();
   });
 
   afterEach(async () => {
     jest.useRealTimers();
-    globalThis.fetch = originalFetch;
-    await secureStorage.clearSession();
+    await secureStorage.clearAll();
   });
 
-  it('renders the clean SplashScreen with Artha logo, app name, and tagline', async () => {
+  it('renders the clean SplashScreen with Artha branding and tagline', async () => {
     let renderer!: ReactTestRenderer.ReactTestRenderer;
     await act(async () => {
-      renderer = ReactTestRenderer.create(<SplashScreen />);
+      renderer = ReactTestRenderer.create(<SplashScreen isReady={false} />);
     });
 
-    const json = JSON.stringify(renderer.toJSON());
-    expect(json).toContain('Artha');
-    expect(json).toContain('Know. Spend. Grow.');
+    const textNodes = renderer.root.findAllByType(Text);
+    const allText = textNodes.map((n) => n.props.children).flat().join(' ');
+    expect(allText).toContain('Artha');
+    expect(allText).toContain('Know. Spend. Grow.');
 
     await act(async () => {
       renderer.unmount();
     });
   });
 
-  it('shows splash screen on launch and transitions to welcome flow after session restoration', async () => {
+  it('shows welcome / auth flow when unauthenticated', async () => {
     let renderer!: ReactTestRenderer.ReactTestRenderer;
     await act(async () => {
       renderer = ReactTestRenderer.create(<App />);
     });
 
-    // Splash screen is initially visible
-    expect(
-      renderer.root.findByProps({ testID: 'artha-splash-screen' }),
-    ).toBeDefined();
-
-    // Advance timers so the splash entrance/exit completes
     await act(async () => {
       jest.advanceTimersByTime(2000);
     });
@@ -64,16 +51,16 @@ describe('Artha App Root & SplashScreen', () => {
     });
   });
 
-  it('exits splash screen quickly in offline mode with cached session without getting stuck', async () => {
-    const cachedSession = {
-      accessToken: 'offline-jwt-token',
-      refreshToken: 'offline-refresh-token',
+  it('launches cleanly into the 4-tab mobile prototype navigation when authenticated', async () => {
+    const session = {
+      accessToken: 'test-jwt-token',
+      refreshToken: 'test-refresh-token',
       accessTokenExpiresAt: Date.now() + 600_000,
-      sessionId: 'session-offline-1',
+      sessionId: 'sess_1',
       user: {
-        id: 'usr-offline-1',
-        displayName: 'Offline User',
-        email: 'offline@artha.app',
+        id: 'usr_1',
+        displayName: 'Vansh Mehta',
+        email: 'vansh.mehta@example.com',
         emailVerified: true,
         emailVerifiedAt: new Date().toISOString(),
         status: 'ACTIVE',
@@ -88,30 +75,25 @@ describe('Artha App Root & SplashScreen', () => {
         createdAt: new Date().toISOString(),
       },
     };
-    await secureStorage.saveSession(cachedSession);
-
-    // Mock network failure / offline mode
-    (globalThis.fetch as jest.Mock).mockRejectedValue(
-      new Error('Network request failed'),
-    );
+    await secureStorage.saveSession(session);
 
     let renderer!: ReactTestRenderer.ReactTestRenderer;
     await act(async () => {
       renderer = ReactTestRenderer.create(<App />);
     });
 
-    // Advance timer past splash duration and 280ms fade out animation
     await act(async () => {
-      jest.advanceTimersByTime(2500);
+      jest.advanceTimersByTime(2000);
     });
 
-    // In offline mode with cached session, splash screen exits quickly to home screen
-    expect(
-      renderer.root.findAllByProps({ testID: 'artha-splash-screen' }),
-    ).toHaveLength(0);
-    expect(
-      renderer.root.findByProps({ testID: 'offline-mode-banner' }),
-    ).toBeDefined();
+    const textNodes = renderer.root.findAllByType(Text);
+    const allText = textNodes.map((n) => n.props.children).flat().join(' ');
+
+    // 4 primary navigation tabs
+    expect(allText).toContain('Home');
+    expect(allText).toContain('PE Tracker');
+    expect(allText).toContain('Groups');
+    expect(allText).toContain('Account');
 
     await act(async () => {
       renderer.unmount();

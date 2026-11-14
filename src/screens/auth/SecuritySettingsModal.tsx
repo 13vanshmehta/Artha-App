@@ -55,6 +55,7 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
     fetchSessions,
     fetchSecurityPreferences,
     revokeSession,
+    reportSuspiciousSession,
     revokeOtherSessions,
     lockNow,
     logout,
@@ -289,14 +290,34 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
   // =========================================================================
   // HANDLERS — SCREEN 5: ACTIVE SESSIONS
   // =========================================================================
-  const handleRevokeSession = async (sessionId: string) => {
+  const handleRevokeSession = async (
+    sessionId: string,
+    isSuspicious = false,
+  ) => {
     setErrorMsg(null);
     setSuccessMsg(null);
     setBusyAction(`session-${sessionId}`);
     try {
-      await revokeSession(sessionId);
-      setSuccessMsg('Device session revoked.');
-      toast.info('Device session revoked.');
+      if (isSuspicious) {
+        await reportSuspiciousSession(sessionId);
+        toast.warning(
+          'Unknown device signed out. For your security, we recommend changing your password.',
+          {
+            title: 'Security Alert',
+            duration: 7000,
+            action: {
+              label: 'CHANGE PASSWORD',
+              onPress: () => {
+                setShowPasswordEditor(true);
+              },
+            },
+          },
+        );
+      } else {
+        await revokeSession(sessionId);
+        setSuccessMsg('Device session signed out successfully.');
+        toast.success('Device signed out successfully.', 'Session Ended');
+      }
       await loadScreenData();
     } catch (err) {
       const msg =
@@ -915,28 +936,57 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
                         )}
                       </View>
                       <Text style={styles.settingSub}>
-                        {sess.platform.toUpperCase()} • Last active{' '}
-                        {new Date(sess.lastUsedAt).toLocaleString()}
+                        {sess.operatingSystem || sess.platform.toUpperCase()} •{' '}
+                        {sess.approximateLocation || 'India'} • Last active{' '}
+                        {new Date(sess.lastUsedAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
                       </Text>
                     </View>
                     {!sess.isCurrent ? (
-                      <TouchableOpacity
-                        style={[styles.smallActionBtn, styles.unlinkBtn]}
-                        onPress={() => handleRevokeSession(sess.id)}
-                        disabled={busyAction === `session-${sess.id}`}
-                        testID={`revoke-session-${sess.id}`}
-                      >
-                        <Text
+                      <View style={{ flexDirection: 'row', gap: 6 }}>
+                        <TouchableOpacity
                           style={[
-                            styles.smallActionBtnText,
-                            styles.unlinkBtnText,
+                            styles.smallActionBtn,
+                            {
+                              backgroundColor: '#FFFBEB',
+                              borderColor: '#FDE68A',
+                              borderWidth: 1,
+                            },
                           ]}
+                          onPress={() => handleRevokeSession(sess.id, true)}
+                          disabled={busyAction === `session-${sess.id}`}
+                          testID={`report-suspicious-${sess.id}`}
                         >
-                          {busyAction === `session-${sess.id}`
-                            ? 'Revoking...'
-                            : 'Revoke'}
-                        </Text>
-                      </TouchableOpacity>
+                          <Text
+                            style={[
+                              styles.smallActionBtnText,
+                              { color: '#B45309', fontSize: 10.5 },
+                            ]}
+                          >
+                            Not Me
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.smallActionBtn, styles.unlinkBtn]}
+                          onPress={() => handleRevokeSession(sess.id, false)}
+                          disabled={busyAction === `session-${sess.id}`}
+                          testID={`revoke-session-${sess.id}`}
+                        >
+                          <Text
+                            style={[
+                              styles.smallActionBtnText,
+                              styles.unlinkBtnText,
+                            ]}
+                          >
+                            {busyAction === `session-${sess.id}`
+                              ? 'Signing out...'
+                              : 'Sign Out'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     ) : null}
                   </View>
                 ))

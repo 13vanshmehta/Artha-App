@@ -20,21 +20,21 @@ export const borderRadius = {
 
 export const shadows = {
   subtle: {
-    shadowColor: '#071F46',
+    shadowColor: '#01151E',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 2,
   },
   card: {
-    shadowColor: '#071F46',
+    shadowColor: '#01151E',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.12,
     shadowRadius: 14,
     elevation: 4,
   },
   floating: {
-    shadowColor: '#071F46',
+    shadowColor: '#01151E',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.2,
     shadowRadius: 20,

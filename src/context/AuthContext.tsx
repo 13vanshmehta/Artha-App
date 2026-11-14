@@ -37,6 +37,9 @@ export interface ActiveSessionItem {
   id: string;
   deviceName: string;
   platform: string;
+  deviceType?: 'mobile' | 'tablet' | 'desktop' | 'web';
+  operatingSystem?: string;
+  approximateLocation?: string | null;
   ipAddress: string | null;
   createdAt: string;
   lastUsedAt: string;
@@ -117,11 +120,18 @@ export interface AuthContextValue {
   unlinkSocialProvider: (provider: 'GOOGLE' | 'APPLE') => Promise<void>;
   fetchSessions: () => Promise<ActiveSessionItem[]>;
   revokeSession: (sessionId: string) => Promise<void>;
+  reportSuspiciousSession: (
+    sessionId: string,
+  ) => Promise<{ message: string; recommendedAction?: string }>;
   revokeOtherSessions: () => Promise<{ message: string; revokedCount: number }>;
-  updateProfile: (displayName: string) => Promise<StoredUserSummary>;
+  updateProfile: (
+    params:
+      | { displayName?: string; phoneNumber?: string; email?: string }
+      | string,
+  ) => Promise<StoredUserSummary>;
   updateAppLockTimeout: (timeoutSeconds: number) => Promise<void>;
-  deleteAccount: (params: {
-    confirmationText: string;
+  deleteAccount: (params?: {
+    confirmationText?: string;
     password?: string;
     pin?: string;
   }) => Promise<void>;
@@ -498,6 +508,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         },
       },
     );
+    if (socialRes.fullName && !payload.user.displayName) {
+      payload.user.displayName = socialRes.fullName;
+    }
+    if (socialRes.email && !payload.user.email) {
+      payload.user.email = socialRes.email;
+    }
+    if (socialRes.photoUrl && !payload.user.avatarUrl) {
+      payload.user.avatarUrl = socialRes.photoUrl;
+    }
     const isNewAccount =
       Date.now() - new Date(payload.user.createdAt).getTime() < 120_000;
     await applySessionPayload(payload, { checkOnboarding: isNewAccount });
@@ -879,6 +898,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     [currentSessionId],
   );
 
+  const reportSuspiciousSession = useCallback(
+    async (sessionId: string) => {
+      const res = await apiClient.request<{
+        message: string;
+        revokedSessionId: string;
+        recommendedAction?: string;
+      }>(`/auth/sessions/${sessionId}/report-suspicious`, {
+        method: 'POST',
+      });
+      if (sessionId === currentSessionId) {
+        await apiClient.invalidateLocalSession('CURRENT_SESSION_REVOKED');
+      }
+      return res;
+    },
+    [currentSessionId],
+  );
+
   const revokeOtherSessions = useCallback(async () => {
     const res = await apiClient.request<{
       message: string;
@@ -890,25 +926,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const updateProfile = useCallback(
-    async (displayName: string): Promise<StoredUserSummary> => {
+    async (
+      params:
+        | { displayName?: string; phoneNumber?: string; email?: string }
+        | string,
+    ): Promise<StoredUserSummary> => {
+      const payloadBody =
+        typeof params === 'string'
+          ? { displayName: params.trim() }
+          : {
+              ...(params.displayName ? { displayName: params.displayName.trim() } : {}),
+              ...(params.phoneNumber !== undefined ? { phoneNumber: params.phoneNumber.trim() } : {}),
+              ...(params.email ? { email: params.email.trim() } : {}),
+            };
+
       const res = await apiClient.request<{
-        message: string;
+        message?: string;
         user: StoredUserSummary;
       }>('/auth/me', {
         method: 'PATCH',
-        body: { displayName: displayName.trim() },
+        body: payloadBody,
       });
 
       const current = apiClient.getInMemorySession();
       if (current) {
         const nextStored: StoredAuthSession = {
           ...current,
-          user: res.user,
+          user: { ...res.user, ...payloadBody },
         };
         apiClient.setInMemorySession(nextStored);
         await secureStorage.saveSession(nextStored);
       }
-      setUser(res.user);
+      setUser((prev) => (prev ? { ...prev, ...res.user, ...payloadBody } : res.user));
       return res.user;
     },
     [],
@@ -941,8 +990,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const deleteAccount = useCallback(
-    async (params: {
-      confirmationText: string;
+    async (params?: {
+      confirmationText?: string;
       password?: string;
       pin?: string;
     }) => {
@@ -951,14 +1000,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         {
           method: 'POST',
           body: {
-            confirmationText: params.confirmationText,
-            ...(params.password ? { password: params.password } : {}),
-            ...(params.pin ? { pin: params.pin } : {}),
+            confirmationText: params?.confirmationText || 'DELETE',
+            ...(params?.password ? { password: params.password } : {}),
+            ...(params?.pin ? { pin: params.pin } : {}),
           },
         },
       );
 
-      // Clear local session only after the backend confirms permanent deletion
+      // Only clear local session once the backend has confirmed deletion
       await signOutGoogleSilently();
       await secureStorage.clearAll();
       await apiClient.invalidateLocalSession('ACCOUNT_DELETED');
@@ -1026,6 +1075,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       unlinkSocialProvider,
       fetchSessions,
       revokeSession,
+      reportSuspiciousSession,
       revokeOtherSessions,
       updateProfile,
       updateAppLockTimeout,
@@ -1065,6 +1115,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       unlinkSocialProvider,
       fetchSessions,
       revokeSession,
+      reportSuspiciousSession,
       revokeOtherSessions,
       updateProfile,
       updateAppLockTimeout,

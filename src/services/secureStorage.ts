@@ -40,7 +40,9 @@ export interface StoredUserSummary {
   id: string;
   displayName: string;
   email: string;
+  phoneNumber?: string | null;
   avatarUrl?: string | null;
+  provider?: string;
   emailVerified: boolean;
   emailVerifiedAt: string | null;
   status: string;

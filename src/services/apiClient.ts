@@ -219,14 +219,36 @@ export class ArthaApiClient {
     }
 
     if (response.ok) {
+      if (
+        parsedBody &&
+        typeof parsedBody === 'object' &&
+        'success' in parsedBody &&
+        parsedBody.success === true &&
+        'data' in parsedBody &&
+        parsedBody.data !== undefined
+      ) {
+        const payloadData = parsedBody.data;
+        if (
+          payloadData &&
+          typeof payloadData === 'object' &&
+          !Array.isArray(payloadData)
+        ) {
+          return { ...(payloadData as Record<string, unknown>), _meta: parsedBody.meta } as T;
+        }
+        return payloadData as T;
+      }
       return parsedBody as T;
     }
 
     const errorCode =
       typeof parsedBody.errorCode === 'string'
         ? parsedBody.errorCode
-        : 'REQUEST_FAILED';
-    const rawMsg = parsedBody.message;
+        : typeof (parsedBody.error as Record<string, unknown>)?.code === 'string'
+          ? ((parsedBody.error as Record<string, unknown>).code as string)
+          : 'REQUEST_FAILED';
+    const rawMsg =
+      parsedBody.message ??
+      (parsedBody.error as Record<string, unknown>)?.message;
     const message = Array.isArray(rawMsg)
       ? rawMsg.join(' ')
       : typeof rawMsg === 'string'
@@ -237,13 +259,17 @@ export class ArthaApiClient {
         ? (parsedBody.details as Record<string, unknown>)
         : undefined;
 
-    // Coordinate single-flight refresh only when 401 is due to TOKEN_EXPIRED on an eligible authenticated route
+    // Coordinate single-flight refresh when 401 is due to an unusable access token
+    // (expired, or invalid/malformed e.g. from a corrupted stored session) on an eligible route.
+    // If the refresh token is also no good, performRefreshInternal() invalidates the local
+    // session itself, so a broken session self-heals back to the login screen instead of
+    // getting stuck throwing "Invalid access token" on every subsequent request.
     if (
       response.status === 401 &&
       authenticated &&
       !options._retried &&
       !NON_REFRESHABLE_AUTH_PATHS.has(path) &&
-      errorCode === 'TOKEN_EXPIRED'
+      (errorCode === 'TOKEN_EXPIRED' || errorCode === 'INVALID_ACCESS_TOKEN')
     ) {
       const refreshedSession = await this.coordinateTokenRefresh();
       if (refreshedSession) {

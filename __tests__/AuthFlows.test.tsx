@@ -1231,20 +1231,21 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       const overviewText = getRenderedText();
       expect(overviewText).toContain('Vansh Mehta');
       expect(overviewText).toContain('vansh@artha.app');
-      expect(overviewText).toContain('Manage Profile');
+      expect(overviewText).toContain('Account Settings');
       expect(overviewText).toContain('Account Security');
-      expect(overviewText).toContain('Payment Methods & UPI');
+      expect(overviewText).toContain('Appearance');
+      expect(overviewText).toContain('Notifications');
       expect(overviewText).toContain('App Lock & Biometrics');
       expect(overviewText).toContain('Active Sessions');
       // Verify fake Artha Plus membership card is removed
       expect(overviewText).not.toContain('Artha Plus');
 
-      // 1. Open Manage Profile & update display name
-      const manageProfileBtn = renderer.root.findByProps({
-        testID: 'account-manage-profile-btn',
+      // 1. Open Manage Profile via Pencil Button & update display name
+      const editPencilBtn = renderer.root.findByProps({
+        testID: 'profile-edit-pencil-btn',
       });
       await act(async () => {
-        manageProfileBtn.props.onPress();
+        editPencilBtn.props.onPress();
       });
 
       const nameInput = renderer.root.findByProps({
@@ -1263,7 +1264,21 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
 
       expect(getRenderedText()).toContain('Vansh M.');
 
-      // 2. Open Account Security (Server Credentials & Identity Providers)
+      // 2. Open Account Settings
+      const openSettingsBtn = renderer.root.findByProps({
+        testID: 'account-settings-btn',
+      });
+      await act(async () => {
+        openSettingsBtn.props.onPress();
+      });
+
+      const settingsTree = getRenderedText();
+      expect(settingsTree).toContain('Currency');
+      expect(settingsTree).toContain('Timezone');
+      expect(settingsTree).toContain('App Language');
+      expect(settingsTree).toContain('ADVANCED');
+
+      // 3. Open Account Security
       const openSecurityBtn = renderer.root.findByProps({
         testID: 'account-open-security-btn',
       });
@@ -1272,69 +1287,48 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       });
 
       const credentialsTree = getRenderedText();
-      expect(credentialsTree).toContain('Security & Sign-In');
-      expect(credentialsTree).toContain('Connected Identity Providers');
-      // Biometrics should NOT be on the server credentials screen
-      expect(credentialsTree).not.toContain('Lock Artha Now');
+      expect(credentialsTree).toContain('Sign-In Method');
+      expect(credentialsTree).toContain('Password & Credentials');
 
-      // Close security modal
-      const closeSecBtn = renderer.root.findByProps({
-        testID: 'security-modal-close-btn',
-      });
-      await act(async () => {
-        closeSecBtn.props.onPress();
-      });
-
-      // 3. Open App Lock & Biometrics (Local Device Protection)
+      // 4. Open App Lock & Biometrics
       const openAppLockBtn = renderer.root.findByProps({
-        testID: 'manage-security-sessions-btn',
+        testID: 'account-applock-btn',
       });
       await act(async () => {
         openAppLockBtn.props.onPress();
       });
 
       const appLockTree = getRenderedText();
-      expect(appLockTree).toContain('Local Device Protection');
-      expect(appLockTree).toContain('Lock Behavior');
+      expect(appLockTree).toContain('Enable Biometric Login');
+      expect(appLockTree).toContain('Setup App Password');
 
-      const closeAppLockBtn = renderer.root.findByProps({
-        testID: 'security-modal-close-btn',
+      // 5. Open Account Settings, tap Delete Account, enter password, and delete directly
+      const openSettingsAgainBtn = renderer.root.findByProps({
+        testID: 'account-settings-btn',
       });
       await act(async () => {
-        closeAppLockBtn.props.onPress();
+        openSettingsAgainBtn.props.onPress();
       });
 
-      // 4. Open Delete Account 2-step confirmation flow
       const deleteAccountBtn = renderer.root.findByProps({
-        testID: 'account-delete-btn',
+        testID: 'delete-account-advanced-btn',
       });
       await act(async () => {
         deleteAccountBtn.props.onPress();
       });
 
-      const continueDeleteBtn = renderer.root.findByProps({
-        testID: 'delete-account-continue-btn',
-      });
-      await act(async () => {
-        continueDeleteBtn.props.onPress();
-      });
-
-      const confirmWordInput = renderer.root.findByProps({
-        testID: 'delete-account-confirm-input',
-      });
-      const confirmPassInput = renderer.root.findByProps({
+      const passInput = renderer.root.findByProps({
         testID: 'delete-account-password-input',
       });
       await act(async () => {
-        confirmWordInput.props.onChangeText('DELETE');
-        confirmPassInput.props.onChangeText('Artha@2026');
+        passInput.props.onChangeText('Artha@2026');
       });
 
-      const submitDeleteBtn = renderer.root.findByProps({
+      const confirmDeleteBtn = renderer.root.findByProps({
         testID: 'delete-account-submit-btn',
       });
       await act(async () => {
-        await submitDeleteBtn.props.onPress();
+        await confirmDeleteBtn.props.onPress();
       });
 
       expect(await secureStorage.loadSession()).toBeNull();
