@@ -13,6 +13,8 @@ export interface SocialTokenResult {
   cancelled: boolean;
   token?: string;
   fullName?: string | null;
+  email?: string | null;
+  photoUrl?: string | null;
   errorMessage?: string;
 }
 
@@ -129,6 +131,7 @@ async function executeGoogleSignIn(): Promise<SocialTokenResult> {
 
     if (isSuccessResponse(response)) {
       const idToken = response.data?.idToken;
+      const gUser = response.data?.user;
       if (!idToken) {
         logSocialAuthDebug(
           'Google Sign-In succeeded without returning an idToken.',
@@ -141,14 +144,23 @@ async function executeGoogleSignIn(): Promise<SocialTokenResult> {
       return {
         cancelled: false,
         token: idToken,
+        fullName: gUser?.name ?? null,
+        email: gUser?.email ?? null,
+        photoUrl: gUser?.photo ?? null,
       };
     }
 
     // Fallback for legacy/custom mock shapes
-    const fallbackIdToken =
-      (response as unknown as { data?: { idToken?: string }; idToken?: string })
-        ?.data?.idToken ??
-      (response as unknown as { idToken?: string })?.idToken;
+    const rawData = response as unknown as {
+      data?: {
+        idToken?: string;
+        user?: { name?: string; email?: string; photo?: string };
+      };
+      idToken?: string;
+      user?: { name?: string; email?: string; photo?: string };
+    };
+    const fallbackIdToken = rawData?.data?.idToken ?? rawData?.idToken;
+    const fallbackUser = rawData?.data?.user ?? rawData?.user;
 
     if (!fallbackIdToken) {
       logSocialAuthDebug(
@@ -163,6 +175,9 @@ async function executeGoogleSignIn(): Promise<SocialTokenResult> {
     return {
       cancelled: false,
       token: fallbackIdToken,
+      fullName: fallbackUser?.name ?? null,
+      email: fallbackUser?.email ?? null,
+      photoUrl: fallbackUser?.photo ?? null,
     };
   } catch (err: unknown) {
     if (isErrorWithCode(err)) {

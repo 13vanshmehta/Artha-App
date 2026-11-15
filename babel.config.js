@@ -3,8 +3,13 @@ const path = require('path');
 
 const ALLOWED_PUBLIC_ENV_KEYS = new Set([
   'ARTHA_API_BASE_URL',
+  'ARTHA_APP_NAME',
+  'ARTHA_SUPPORT_EMAIL',
+  'ARTHA_APP_URL',
   'ARTHA_GOOGLE_WEB_CLIENT_ID',
   'ARTHA_GOOGLE_IOS_CLIENT_ID',
+  'ARTHA_GOOGLE_ANDROID_CLIENT_ID',
+  'ARTHA_IOS_REVERSED_CLIENT_ID',
   'ARTHA_APPLE_SERVICE_ID',
 ]);
 
@@ -27,10 +32,10 @@ function loadDotEnvFiles() {
   const isProd = process.env.NODE_ENV === 'production';
   const isTest = process.env.NODE_ENV === 'test';
   const files = isTest
-    ? ['.env.local']
+    ? ['.env.local', '.env']
     : isProd
-      ? ['.env.production']
-      : ['.env.development', '.env.local'];
+      ? ['.env.production', '.env']
+      : ['.env.local', '.env'];
 
   for (const filename of files) {
     const filePath = path.resolve(__dirname, filename);

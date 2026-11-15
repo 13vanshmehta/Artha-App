@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 420">
+  <defs><linearGradient id="markBlue" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#031D44"/>
+      <stop offset="100%" stop-color="#084887"/>
+    </linearGradient>
+    <linearGradient id="markOrange" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F58A07"/>
+      <stop offset="100%" stop-color="#F9AB55"/>
+    </linearGradient>
+    <mask id="markGapMask">
+      <rect x="190" y="150" width="644" height="670" fill="white"/>
+      <path d="M 248 660 Q 500 622 758 398" fill="none" stroke="black" stroke-width="96" stroke-linecap="round"/>
+    </mask></defs>
+  <g transform="translate(-72.0,-50.6) scale(0.537)">
+    <path d="M 284 780 L 452 276 C 480 198, 564 198, 592 276 L 760 780 L 618 780 L 522 460 L 426 780 Z" fill="url(#markBlue)" mask="url(#markGapMask)"/>
+    <path d="M 262 674 Q 500 636 750 406" fill="none" stroke="url(#markOrange)" stroke-width="64" stroke-linecap="round"/>
+    <path d="M 650 378 L 786 370 L 764 506" fill="none" stroke="url(#markOrange)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="460" y="285" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="210" font-weight="800" letter-spacing="-4">
+    <tspan fill="#031D44">Arth</tspan><tspan fill="#F58A07">a</tspan>
+  </text>
+</svg>

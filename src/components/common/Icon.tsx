@@ -53,6 +53,7 @@ export type IconName =
   | 'moon'
   | 'help'
   | 'trash'
+  | 'pencil'
   | 'smartphone'
   | 'fingerprint'
   | 'biometric';
@@ -986,6 +987,22 @@ export const Icon: React.FC<IconProps> = ({ name, size = 20, color = '#FFFFFF' }
               borderColor: color,
               borderBottomLeftRadius: 3,
               borderBottomRightRadius: 3,
+            }}
+          />
+        </View>
+      );
+
+    case 'pencil':
+      return (
+        <View style={[styles.center, { width: s, height: s }]}>
+          <View
+            style={{
+              width: s * 0.65,
+              height: s * 0.65,
+              borderWidth: strokeWidth,
+              borderColor: color,
+              borderRadius: 2,
+              transform: [{ rotate: '45deg' }],
             }}
           />
         </View>

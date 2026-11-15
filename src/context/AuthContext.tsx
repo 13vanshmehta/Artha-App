@@ -37,6 +37,9 @@ export interface ActiveSessionItem {
   id: string;
   deviceName: string;
   platform: string;
+  deviceType?: 'mobile' | 'tablet' | 'desktop' | 'web';
+  operatingSystem?: string;
+  approximateLocation?: string | null;
   ipAddress: string | null;
   createdAt: string;
   lastUsedAt: string;
@@ -76,7 +79,11 @@ export interface AuthContextValue {
   resendVerificationOtp: (
     email: string,
   ) => Promise<{ resendCooldownSeconds: number; message: string }>;
-  confirmEmailOtp: (params: { email: string; code: string }) => Promise<void>;
+  confirmEmailOtp: (params: {
+    email: string;
+    code: string;
+    password: string;
+  }) => Promise<void>;
   login: (params: { email: string; password: string }) => Promise<void>;
   signInWithGoogle: () => Promise<{ cancelled: boolean }>;
   signInWithApple: () => Promise<{ cancelled: boolean }>;
@@ -117,11 +124,21 @@ export interface AuthContextValue {
   unlinkSocialProvider: (provider: 'GOOGLE' | 'APPLE') => Promise<void>;
   fetchSessions: () => Promise<ActiveSessionItem[]>;
   revokeSession: (sessionId: string) => Promise<void>;
+  reportSuspiciousSession: (
+    sessionId: string,
+  ) => Promise<{ message: string; recommendedAction?: string }>;
   revokeOtherSessions: () => Promise<{ message: string; revokedCount: number }>;
-  updateProfile: (displayName: string) => Promise<StoredUserSummary>;
+  updateProfile: (
+    params: { displayName?: string; phoneNumber?: string } | string,
+  ) => Promise<StoredUserSummary>;
+  requestEmailChange: (
+    newEmail: string,
+    currentPassword?: string,
+  ) => Promise<{ message: string; resendCooldownSeconds: number }>;
+  confirmEmailChange: (code: string) => Promise<StoredUserSummary>;
   updateAppLockTimeout: (timeoutSeconds: number) => Promise<void>;
-  deleteAccount: (params: {
-    confirmationText: string;
+  deleteAccount: (params?: {
+    confirmationText?: string;
     password?: string;
     pin?: string;
   }) => Promise<void>;
@@ -130,7 +147,7 @@ export interface AuthContextValue {
   refreshProfile: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const DEVICE_NAME = Platform.select({
   ios: 'Artha iOS Mobile',
@@ -156,6 +173,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     useState<boolean>(false);
 
   const backgroundTimestampRef = useRef<number | null>(null);
+  const isBiometricInFlightRef = useRef<boolean>(false);
 
   const handleSessionInvalidated = useCallback((reason?: string) => {
     setUser(null);
@@ -218,12 +236,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       const initialLockState = await secureStorage.loadAppLockState(
         stored.user.id,
       );
-      const initialShouldLock = Boolean(
+      const initialHasBio = Boolean(
         stored.user.securityPreferences?.biometricEnabled ||
-          stored.user.securityPreferences?.pinEnabled ||
-          initialLockState?.biometricEnabled ||
+          initialLockState?.biometricEnabled,
+      );
+      const initialHasPin = Boolean(
+        stored.user.securityPreferences?.pinEnabled ||
           initialLockState?.pinEnabled,
       );
+      const initialShouldLock = initialHasBio || initialHasPin;
 
       if (mounted) {
         setStatus(initialShouldLock ? 'locked' : 'authenticated');
@@ -259,34 +280,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setIsOfflineBannerVisible(false);
 
         const localLock = await secureStorage.loadAppLockState(meRes.user.id);
-        const shouldLock =
-          Boolean(
-            meRes.user.securityPreferences?.biometricEnabled ||
-              meRes.user.securityPreferences?.pinEnabled ||
-              localLock?.biometricEnabled ||
-              localLock?.pinEnabled,
-          );
+        const hasBio = Boolean(
+          meRes.user.securityPreferences?.biometricEnabled ||
+            localLock?.biometricEnabled,
+        );
+        const hasPin = Boolean(
+          meRes.user.securityPreferences?.pinEnabled ||
+            localLock?.pinEnabled,
+        );
+        const shouldLock = hasBio || hasPin;
 
         setStatus(shouldLock ? 'locked' : 'authenticated');
-      } catch (err) {
+      } catch {
         if (!mounted) return;
-        if (err instanceof ApiError && err.errorCode === 'NETWORK_ERROR') {
-          // Offline session restoration with cached Keychain session
-          setUser(activeSession.user);
-          setCurrentSessionId(activeSession.sessionId);
+        // apiClient clears credentials itself on a definitive rejection (terminal
+        // 401 codes or a rejected refresh) and notifies handleSessionInvalidated.
+        // Anything else — offline, timeout, 429, 5xx — must not sign the user out,
+        // so keep the cached session and show the offline/degraded banner.
+        if (apiClient.hasActiveSession()) {
+          const cached = apiClient.getInMemorySession() ?? activeSession;
+          setUser(cached.user);
+          setCurrentSessionId(cached.sessionId);
           setIsOfflineBannerVisible(true);
           const localLock = await secureStorage.loadAppLockState(
-            activeSession.user.id,
+            cached.user.id,
           );
-          const shouldLock = Boolean(
-            activeSession.user.securityPreferences?.biometricEnabled ||
-              activeSession.user.securityPreferences?.pinEnabled ||
-              localLock?.biometricEnabled ||
+          const hasBio = Boolean(
+            cached.user.securityPreferences?.biometricEnabled ||
+              localLock?.biometricEnabled,
+          );
+          const hasPin = Boolean(
+            cached.user.securityPreferences?.pinEnabled ||
               localLock?.pinEnabled,
           );
+          const shouldLock = hasBio || hasPin;
           setStatus(shouldLock ? 'locked' : 'authenticated');
         } else {
-          await apiClient.invalidateLocalSession('RESTORE_FAILED');
           setStatus('unauthenticated');
         }
       }
@@ -299,25 +328,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Lock app on background -> foreground transition when Biometrics or PIN is enabled
+  // Lock app on background -> foreground transition after 60s (1 min) grace period
   useEffect(() => {
     const subscription = AppState.addEventListener(
       'change',
       (nextState: AppStateStatus) => {
-        if (nextState === 'background' || nextState === 'inactive') {
+        if (nextState === 'background') {
           backgroundTimestampRef.current = Date.now();
         } else if (nextState === 'active') {
           const bgAt = backgroundTimestampRef.current;
           backgroundTimestampRef.current = null;
-          if (status === 'authenticated' && user && bgAt) {
-            const timeoutSec =
-              user.securityPreferences?.appLockTimeoutSeconds ?? 60;
-            const elapsedSeconds = (Date.now() - bgAt) / 1000;
-            const lockEnabled =
-              user.securityPreferences?.biometricEnabled ||
-              user.securityPreferences?.pinEnabled;
-            if (lockEnabled && elapsedSeconds >= timeoutSec) {
-              setStatus('locked');
+          if (
+            status === 'authenticated' &&
+            user &&
+            bgAt &&
+            !isBiometricInFlightRef.current
+          ) {
+            const hasBio = Boolean(user.securityPreferences?.biometricEnabled);
+            const hasPin = Boolean(user.securityPreferences?.pinEnabled);
+            if (hasBio || hasPin) {
+              const elapsedSeconds = (Date.now() - bgAt) / 1000;
+              // 60-second grace period: if app was backgrounded for < 60s, no need to re-verify.
+              // If away for >= 60s (1 minute), re-verify with biometrics/PIN.
+              const timeoutSec =
+                user.securityPreferences?.appLockTimeoutSeconds ?? 60;
+              if (elapsedSeconds >= timeoutSec) {
+                setStatus('locked');
+              }
             }
           }
         }
@@ -426,7 +463,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const confirmEmailOtp = useCallback(
-    async (params: { email: string; code: string }) => {
+    async (params: { email: string; code: string; password: string }) => {
       const payload = await apiClient.request<AuthSessionApiPayload>(
         '/auth/email/verification/confirm',
         {
@@ -435,6 +472,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           body: {
             email: params.email.trim(),
             code: params.code.trim(),
+            // Required by the backend: for a new account this sets the password,
+            // so only the inbox owner decides it (account pre-hijack protection).
+            password: params.password,
             deviceName: DEVICE_NAME,
             platform: Platform.OS,
           },
@@ -498,6 +538,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         },
       },
     );
+    if (socialRes.fullName && !payload.user.displayName) {
+      payload.user.displayName = socialRes.fullName;
+    }
+    if (socialRes.email && !payload.user.email) {
+      payload.user.email = socialRes.email;
+    }
+    if (socialRes.photoUrl && !payload.user.avatarUrl) {
+      payload.user.avatarUrl = socialRes.photoUrl;
+    }
     const isNewAccount =
       Date.now() - new Date(payload.user.createdAt).getTime() < 120_000;
     await applySessionPayload(payload, { checkOnboarding: isNewAccount });
@@ -607,29 +656,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       };
     }
 
-    const bioResult = await secureStorage.authenticateWithBiometrics(user.id);
-    if (!bioResult.success) {
-      if (bioResult.enrollmentChanged) {
-        await secureStorage.clearBiometricUnlock();
-      }
-      return bioResult;
-    }
-
-    // Always verify valid backend session after local unlock
+    isBiometricInFlightRef.current = true;
     try {
-      await refreshProfile();
-      setStatus('authenticated');
-      return { success: true };
-    } catch (err) {
-      if (err instanceof ApiError && err.errorCode === 'NETWORK_ERROR') {
+      const bioResult = await secureStorage.authenticateWithBiometrics(user.id);
+      if (!bioResult.success) {
+        if (bioResult.enrollmentChanged) {
+          await secureStorage.clearBiometricUnlock();
+        }
+        return bioResult;
+      }
+
+      // Always verify valid backend session after local unlock
+      try {
+        await refreshProfile();
         setStatus('authenticated');
         return { success: true };
+      } catch {
+        // The device owner just passed the OS biometric check. Unless apiClient
+        // has definitively rejected the session (and already cleared it), a
+        // failed profile sync — offline, 429, 5xx — must not sign them out.
+        if (apiClient.hasActiveSession()) {
+          setStatus('authenticated');
+          return { success: true };
+        }
+        return {
+          success: false,
+          errorMessage: 'Your session has expired. Please sign in again.',
+        };
       }
-      await apiClient.invalidateLocalSession('SESSION_INVALID_ON_UNLOCK');
-      return {
-        success: false,
-        errorMessage: 'Your session has expired. Please sign in again.',
-      };
+    } finally {
+      setTimeout(() => {
+        isBiometricInFlightRef.current = false;
+      }, 500);
     }
   }, [refreshProfile, user]);
 
@@ -648,11 +706,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           method: 'POST',
           body: { pin },
         });
-        await refreshProfile();
-        setStatus('authenticated');
-        return { success: true };
       } catch (err) {
-        if (err instanceof ApiError && err.errorCode === 'NETWORK_ERROR') {
+        // Server unreachable or failing (offline, timeout, 5xx): fall back to the
+        // on-device verifier rather than rejecting a possibly-correct PIN.
+        const serverUnavailable =
+          err instanceof ApiError &&
+          (err.errorCode === 'NETWORK_ERROR' || err.statusCode >= 500);
+        if (serverUnavailable) {
           const localCheck = await secureStorage.verifyLocalPin(user.id, pin);
           if (localCheck.valid) {
             setStatus('authenticated');
@@ -680,6 +740,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           errorMessage: 'PIN verification failed.',
         };
       }
+
+      // PIN accepted by the server. A failed profile sync afterwards is not a
+      // reason to reject the unlock unless the session itself was revoked.
+      try {
+        await refreshProfile();
+      } catch {
+        if (!apiClient.hasActiveSession()) {
+          return {
+            success: false,
+            errorMessage: 'Your session has expired. Please sign in again.',
+          };
+        }
+      }
+      setStatus('authenticated');
+      return { success: true };
     },
     [refreshProfile, user],
   );
@@ -879,6 +954,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     [currentSessionId],
   );
 
+  const reportSuspiciousSession = useCallback(
+    async (sessionId: string) => {
+      const res = await apiClient.request<{
+        message: string;
+        revokedSessionId: string;
+        recommendedAction?: string;
+      }>(`/auth/sessions/${sessionId}/report-suspicious`, {
+        method: 'POST',
+      });
+      if (sessionId === currentSessionId) {
+        await apiClient.invalidateLocalSession('CURRENT_SESSION_REVOKED');
+      }
+      return res;
+    },
+    [currentSessionId],
+  );
+
   const revokeOtherSessions = useCallback(async () => {
     const res = await apiClient.request<{
       message: string;
@@ -890,13 +982,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const updateProfile = useCallback(
-    async (displayName: string): Promise<StoredUserSummary> => {
+    async (
+      params: { displayName?: string; phoneNumber?: string } | string,
+    ): Promise<StoredUserSummary> => {
+      const payloadBody =
+        typeof params === 'string'
+          ? { displayName: params.trim() }
+          : {
+              ...(params.displayName ? { displayName: params.displayName.trim() } : {}),
+              ...(params.phoneNumber !== undefined ? { phoneNumber: params.phoneNumber.trim() } : {}),
+            };
+
       const res = await apiClient.request<{
-        message: string;
+        message?: string;
         user: StoredUserSummary;
       }>('/auth/me', {
         method: 'PATCH',
-        body: { displayName: displayName.trim() },
+        body: payloadBody,
+      });
+
+      const current = apiClient.getInMemorySession();
+      if (current) {
+        const nextStored: StoredAuthSession = {
+          ...current,
+          user: { ...res.user, ...payloadBody },
+        };
+        apiClient.setInMemorySession(nextStored);
+        await secureStorage.saveSession(nextStored);
+      }
+      setUser((prev) => (prev ? { ...prev, ...res.user, ...payloadBody } : res.user));
+      return res.user;
+    },
+    [],
+  );
+
+  const requestEmailChange = useCallback(
+    async (newEmail: string, currentPassword?: string) => {
+      return apiClient.request<{
+        message: string;
+        otpExpiresInSeconds: number;
+        resendCooldownSeconds: number;
+      }>('/auth/email/change/request', {
+        method: 'POST',
+        body: {
+          newEmail: newEmail.trim(),
+          ...(currentPassword ? { currentPassword } : {}),
+        },
+      });
+    },
+    [],
+  );
+
+  const confirmEmailChange = useCallback(
+    async (code: string): Promise<StoredUserSummary> => {
+      const res = await apiClient.request<{
+        message: string;
+        user: StoredUserSummary;
+      }>('/auth/email/change/confirm', {
+        method: 'POST',
+        body: { code: code.trim() },
       });
 
       const current = apiClient.getInMemorySession();
@@ -941,8 +1085,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const deleteAccount = useCallback(
-    async (params: {
-      confirmationText: string;
+    async (params?: {
+      confirmationText?: string;
       password?: string;
       pin?: string;
     }) => {
@@ -951,14 +1095,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         {
           method: 'POST',
           body: {
-            confirmationText: params.confirmationText,
-            ...(params.password ? { password: params.password } : {}),
-            ...(params.pin ? { pin: params.pin } : {}),
+            confirmationText: params?.confirmationText || 'DELETE',
+            ...(params?.password ? { password: params.password } : {}),
+            ...(params?.pin ? { pin: params.pin } : {}),
           },
         },
       );
 
-      // Clear local session only after the backend confirms permanent deletion
+      // Only clear local session once the backend has confirmed deletion
       await signOutGoogleSilently();
       await secureStorage.clearAll();
       await apiClient.invalidateLocalSession('ACCOUNT_DELETED');
@@ -1026,8 +1170,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       unlinkSocialProvider,
       fetchSessions,
       revokeSession,
+      reportSuspiciousSession,
       revokeOtherSessions,
       updateProfile,
+      requestEmailChange,
+      confirmEmailChange,
       updateAppLockTimeout,
       deleteAccount,
       logout,
@@ -1065,8 +1212,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       unlinkSocialProvider,
       fetchSessions,
       revokeSession,
+      reportSuspiciousSession,
       revokeOtherSessions,
       updateProfile,
+      requestEmailChange,
+      confirmEmailChange,
       updateAppLockTimeout,
       deleteAccount,
       logout,

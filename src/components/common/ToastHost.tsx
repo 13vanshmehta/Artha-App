@@ -1,4 +1,10 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   AccessibilityInfo,
   Animated,
@@ -16,58 +22,75 @@ import {
   ToastType,
   toastManager,
 } from '../../context/ToastContext';
-import { colors } from '../../theme/colors';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 
 interface ToastThemeVisuals {
   accentColor: string;
-  stripeColor: string;
   iconName: IconName;
 }
 
 const TOAST_VISUALS: Record<ToastType, ToastThemeVisuals> = {
   success: {
     accentColor: '#22C55E',
-    stripeColor: 'rgba(255, 255, 255, 0.28)',
     iconName: 'check',
   },
   info: {
     accentColor: '#0A66FF',
-    stripeColor: 'rgba(255, 255, 255, 0.28)',
     iconName: 'info',
   },
   warning: {
     accentColor: '#EA8C00',
-    stripeColor: 'rgba(255, 255, 255, 0.28)',
     iconName: 'warning',
   },
   error: {
     accentColor: '#EF4444',
-    stripeColor: 'rgba(255, 255, 255, 0.28)',
     iconName: 'error',
   },
 };
 
-const STRIPE_INDICES = Array.from({ length: 24 }, (_, idx) => idx);
-
-interface ToastCardProps {
-  item: ToastItem;
-  onDismiss: (id: string) => void;
+interface RenderedToastItem extends ToastItem {
+  exiting?: boolean;
 }
 
-export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
+interface ToastCardProps {
+  item: RenderedToastItem;
+  onDismiss: (id: string) => void;
+  onExited: (id: string) => void;
+}
+
+export const ToastCard: React.FC<ToastCardProps> = ({
+  item,
+  onDismiss,
+  onExited,
+}) => {
+  const { isDark } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const visuals = TOAST_VISUALS[item.type];
-  const progressAnim = useRef(new Animated.Value(1)).current;
   const entranceAnim = useRef(new Animated.Value(0)).current;
+  const progressAnim = useRef(new Animated.Value(1)).current;
+  const reduceMotionRef = useRef(false);
 
   useEffect(() => {
-    progressAnim.setValue(1);
-    entranceAnim.setValue(0);
+    if (item.duration && item.duration > 0) {
+      progressAnim.setValue(1);
+      Animated.timing(progressAnim, {
+        toValue: 0,
+        duration: item.duration,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }).start();
+    }
+  }, [item.duration, progressAnim]);
 
-    let progressAnimation: Animated.CompositeAnimation | null = null;
+  useEffect(() => {
+    entranceAnim.setValue(0);
 
     Promise.resolve(AccessibilityInfo.isReduceMotionEnabled?.())
       .then((reduceMotion) => {
+        reduceMotionRef.current = !!reduceMotion;
         if (reduceMotion) {
           entranceAnim.setValue(1);
         } else {
@@ -82,28 +105,38 @@ export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
       .catch(() => {
         entranceAnim.setValue(1);
       });
+  }, [entranceAnim, item.createdAt]);
 
-    progressAnimation = Animated.timing(progressAnim, {
+  useEffect(() => {
+    if (!item.exiting) {
+      return;
+    }
+    if (reduceMotionRef.current) {
+      onExited(item.id);
+      return;
+    }
+    const animation = Animated.timing(entranceAnim, {
       toValue: 0,
-      duration: item.duration,
-      easing: Easing.linear,
-      useNativeDriver: false,
+      duration: 180,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
     });
-    progressAnimation.start();
+    animation.start(({ finished }) => {
+      if (finished) {
+        onExited(item.id);
+      }
+    });
+    return () => animation.stop();
+  }, [item.exiting, entranceAnim, item.id, onExited]);
 
-    return () => {
-      progressAnimation?.stop();
-    };
-  }, [entranceAnim, item.createdAt, item.duration, progressAnim]);
+  const translateY = entranceAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-60, 0],
+  });
 
   const progressWidth = progressAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0%', '100%'],
-  });
-
-  const translateY = entranceAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-12, 0],
   });
 
   return (
@@ -128,7 +161,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
           ]}
           testID={`toast-icon-${item.type}`}
         >
-          <Icon name={visuals.iconName} size={17} color={colors.white} />
+          <Icon name={visuals.iconName} size={17} color="#FFFFFF" />
         </View>
 
         {/* Center text block */}
@@ -151,6 +184,23 @@ export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
               {item.message}
             </Text>
           ) : null}
+
+          {/* Optional inline Toast Action button */}
+          {item.action ? (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                onDismiss(item.id);
+                item.action?.onPress();
+              }}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={item.action.label}
+              testID={`toast-action-${item.id}`}
+            >
+              <Text style={styles.actionButtonText}>{item.action.label}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* Right close button */}
@@ -162,11 +212,11 @@ export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
           accessibilityLabel={`Dismiss ${item.title || item.type} notification`}
           testID={`toast-close-${item.id}`}
         >
-          <Icon name="close" size={14} color="#64748B" />
+          <Icon name="close" size={14} color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'} />
         </TouchableOpacity>
       </View>
 
-      {/* Bottom progress bar track matching reference image */}
+      {/* Bottom progress bar track */}
       <View style={styles.progressTrack} testID={`toast-progress-track-${item.id}`}>
         <Animated.View
           style={[
@@ -177,42 +227,41 @@ export const ToastCard: React.FC<ToastCardProps> = ({ item, onDismiss }) => {
             },
           ]}
           testID={`toast-progress-fill-${item.id}`}
-        >
-          <View style={styles.stripesRow} pointerEvents="none">
-            {STRIPE_INDICES.map((idx) => (
-              <View
-                key={idx}
-                style={[
-                  styles.diagonalStripe,
-                  { backgroundColor: visuals.stripeColor },
-                ]}
-              />
-            ))}
-          </View>
-        </Animated.View>
+        />
       </View>
     </Animated.View>
   );
 };
 
 export const ToastHost: React.FC = () => {
+  const styles = useThemedStyles(makeStyles);
   const insets = useContext(SafeAreaInsetsContext) ?? {
     top: 0,
     bottom: 0,
     left: 0,
     right: 0,
   };
-  const [visibleToasts, setVisibleToasts] = useState<ToastItem[]>(
+  const [renderedToasts, setRenderedToasts] = useState<RenderedToastItem[]>(
     () => toastManager.getSnapshot().visible,
   );
 
   useEffect(() => {
     return toastManager.subscribe((snapshot) => {
-      setVisibleToasts(snapshot.visible);
+      setRenderedToasts((prev) => {
+        const nextMap = new Map(snapshot.visible.map((t) => [t.id, t]));
+        const existingIds = new Set(prev.map((t) => t.id));
+        const stillPresent = prev.map((t) => nextMap.get(t.id) ?? { ...t, exiting: true });
+        const newOnes = snapshot.visible.filter((t) => !existingIds.has(t.id));
+        return [...stillPresent, ...newOnes];
+      });
     });
   }, []);
 
-  if (visibleToasts.length === 0) {
+  const handleExited = useCallback((id: string) => {
+    setRenderedToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  if (renderedToasts.length === 0) {
     return null;
   }
 
@@ -224,102 +273,103 @@ export const ToastHost: React.FC = () => {
       pointerEvents="box-none"
       testID="global-toast-host"
     >
-      {visibleToasts.map((item) => (
+      {renderedToasts.map((item) => (
         <ToastCard
           key={item.id}
           item={item}
           onDismiss={(id) => toastManager.dismiss(id)}
+          onExited={handleExited}
         />
       ))}
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  hostContainer: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    zIndex: 100000,
-    elevation: 1000,
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: colors.white,
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.08)',
-    shadowColor: '#071F46',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  cardBody: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 14,
-    paddingRight: 8,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  statusCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  textColumn: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  titleText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1E293B',
-    lineHeight: 19,
-  },
-  messageText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#475569',
-    lineHeight: 18,
-    marginTop: 1,
-  },
-  closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  progressTrack: {
-    width: '100%',
-    height: 5,
-    backgroundColor: '#E2E8F0',
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderTopRightRadius: 3,
-    borderBottomRightRadius: 3,
-    overflow: 'hidden',
-  },
-  stripesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: '100%',
-    width: 480,
-  },
-  diagonalStripe: {
-    width: 6,
-    height: 18,
-    marginRight: 8,
-    transform: [{ rotate: '-35deg' }],
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    hostContainer: {
+      position: 'absolute',
+      left: spacing.lg,
+      right: spacing.lg,
+      zIndex: 100000,
+      elevation: 1000,
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 440,
+      backgroundColor: isDark ? '#000000' : c.white,
+      borderRadius: 14,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.08)',
+      shadowColor: isDark ? 'transparent' : '#01151E',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: isDark ? 0 : 0.12,
+      shadowRadius: 16,
+      elevation: isDark ? 0 : 8,
+    },
+    cardBody: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingLeft: 14,
+      paddingRight: 8,
+      paddingVertical: 12,
+      gap: 12,
+    },
+    statusCircle: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    textColumn: {
+      flex: 1,
+      justifyContent: 'center',
+    },
+    titleText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#1E293B',
+      lineHeight: 19,
+    },
+    messageText: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#475569',
+      lineHeight: 18,
+      marginTop: 1,
+    },
+    closeButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionButton: {
+      alignSelf: 'flex-start',
+      backgroundColor: isDark ? '#F58A07' : '#0F172A',
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 7,
+      marginTop: 6,
+    },
+    actionButtonText: {
+      color: isDark ? '#000000' : '#FFFFFF',
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.3,
+    },
+    progressTrack: {
+      height: 3,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      width: '100%',
+      overflow: 'hidden',
+    },
+    progressBarFill: {
+      height: '100%',
+    },
+  });

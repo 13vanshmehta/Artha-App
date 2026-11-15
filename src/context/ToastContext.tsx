@@ -9,10 +9,16 @@ import { AccessibilityInfo } from 'react-native';
 
 export type ToastType = 'success' | 'info' | 'warning' | 'error';
 
+export interface ToastAction {
+  label: string;
+  onPress: () => void;
+}
+
 export interface ToastOptions {
   id?: string;
   title?: string;
   duration?: number;
+  action?: ToastAction;
 }
 
 export interface ToastItem {
@@ -22,6 +28,7 @@ export interface ToastItem {
   message: string;
   duration: number;
   createdAt: number;
+  action?: ToastAction;
 }
 
 export const DEFAULT_TOAST_DURATIONS: Record<ToastType, number> = {
@@ -179,6 +186,7 @@ class CentralizedToastManager {
       message: displayMessage,
       duration,
       createdAt: Date.now(),
+      action: resolvedOptions.action,
     };
 
     try {

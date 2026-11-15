@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { AuthBrandHeader } from '../../components/auth/AuthBrandHeader';
+import { Logo } from '../../components/common/Logo';
+import { SplashScreen } from '../../components/splash/SplashScreen';
 import {
   AuthPrimaryButton,
   AuthSecondaryButton,
@@ -20,9 +22,11 @@ import {
 } from '../../components/auth/AuthButtons';
 import { AuthFormInput } from '../../components/auth/AuthFormInput';
 import { useAuth } from '../../context/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 import { toast } from '../../context/ToastContext';
 import { ApiError } from '../../services/apiClient';
-import { colors } from '../../theme/colors';
 import { borderRadius, spacing } from '../../theme/spacing';
 
 export type AuthScreenStep =
@@ -82,8 +86,16 @@ export function maskEmailAddress(rawEmail: string): string {
 
 export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
   initialStep = 'welcome',
-  isSplashActive = false,
+  isSplashActive: isSplashActiveProp,
 }) => {
+  // The app's own default launch screen (SplashScreen, shown before this
+  // component ever mounts) already plays the logo-only entrance once. By
+  // the time the Welcome screen appears, the Get Started / Log in actions
+  // should already be in place — no second wait here.
+  const isSplashActive = isSplashActiveProp ?? false;
+  const { isDark } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+
   const insets = useContext(SafeAreaInsetsContext) ?? {
     top: 0,
     bottom: 0,
@@ -102,6 +114,7 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
     requestPasswordReset,
     confirmPasswordReset,
     exitPendingVerification,
+    openPendingVerification,
   } = useAuth();
 
   const [step, setStep] = useState<AuthScreenStep>(
@@ -116,6 +129,13 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
   const [resetToken, setResetToken] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // Password carried from Sign Up / Log In into the verification step. The
+  // backend requires it on confirm (it becomes the account password, so only
+  // the inbox owner decides it). Kept in memory only, never persisted.
+  const [verificationPassword, setVerificationPassword] = useState('');
+  // True when the verification step was reached without a password in memory
+  // (e.g. the navigator remounted), so the step must ask for it.
+  const [askVerificationPassword, setAskVerificationPassword] = useState(false);
 
   // Field-level inline validation errors
   const [fieldErrors, setFieldErrors] = useState<{
@@ -243,6 +263,14 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
   }, [status, pendingVerificationEmail, otpResendCooldownSeconds]);
 
   useEffect(() => {
+    if (step === 'verify_otp' && !verificationPassword) {
+      setAskVerificationPassword(true);
+    }
+    // Only re-evaluate on entering the step; typing into the field must not hide it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  useEffect(() => {
     if (cooldownRemaining <= 0) return;
     const timer = setInterval(() => {
       setCooldownRemaining((prev) => (prev <= 1 ? 0 : prev - 1));
@@ -258,6 +286,8 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
     setPassword('');
     setOtpCode('');
     if (step === 'verify_otp' && next !== 'verify_otp') {
+      setVerificationPassword('');
+      setAskVerificationPassword(false);
       exitPendingVerification();
     }
     setStep(next);
@@ -300,6 +330,8 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
         email: trimmedEmail,
         password,
       });
+      setVerificationPassword(password);
+      setAskVerificationPassword(false);
       setPassword('');
       setCooldownRemaining(res.resendCooldownSeconds);
       const verifyMsg = `We sent a 6-digit verification code to ${maskEmailAddress(res.email)}.`;
@@ -308,6 +340,21 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       setStep('verify_otp');
       triggerStepAnimation('register', 'verify_otp');
     } catch (err) {
+      // An unverified sign-up for this address was made moments ago: a code is
+      // already on its way, so go straight to entering it instead of failing.
+      if (err instanceof ApiError && err.errorCode === 'OTP_RESEND_COOLDOWN') {
+        const retryAfter = Number(err.details?.retryAfterSeconds ?? 60);
+        setVerificationPassword(password);
+        setAskVerificationPassword(false);
+        setPassword('');
+        openPendingVerification(trimmedEmail, retryAfter);
+        setCooldownRemaining(retryAfter);
+        const msg = `A code was already sent to ${maskEmailAddress(trimmedEmail)}. Enter it below.`;
+        setInfoBanner(msg);
+        setStep('verify_otp');
+        triggerStepAnimation('register', 'verify_otp');
+        return;
+      }
       const msg =
         err instanceof Error ? err.message : 'Registration failed.';
       setErrorBanner(msg);
@@ -343,6 +390,8 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       toast.success('Signed in to your Artha account.', 'Welcome Back');
     } catch (err) {
       if (err instanceof ApiError && err.errorCode === 'EMAIL_NOT_VERIFIED') {
+        setVerificationPassword(password);
+        setAskVerificationPassword(false);
         setPassword('');
         setStep('verify_otp');
         triggerStepAnimation('login', 'verify_otp');
@@ -372,14 +421,23 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       setErrorBanner(msg);
       return;
     }
+    if (!verificationPassword) {
+      const msg = 'Please enter your password to finish verifying your account.';
+      setFieldErrors({ password: 'Password required' });
+      setErrorBanner(msg);
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       await confirmEmailOtp({
         email: email.trim(),
         code: cleanCode,
+        password: verificationPassword,
       });
       setOtpCode('');
+      setVerificationPassword('');
+      setAskVerificationPassword(false);
       toast.success(
         'Your email has been verified and your account is active.',
         'Account Verified',
@@ -437,9 +495,9 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       const res = await requestPasswordReset(trimmedEmail);
       const resetMsg =
         res.message ||
-        'If an account is registered with that email, a reset token has been sent.';
+        'If an account is registered with that email, a 6-digit reset code has been sent.';
       setInfoBanner(resetMsg);
-      toast.info(resetMsg, 'Reset Token Sent');
+      toast.info(resetMsg, 'Reset Code Sent');
       setStep('reset_password');
       triggerStepAnimation('forgot_password', 'reset_password');
     } catch (err) {
@@ -466,9 +524,9 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       setErrorBanner(msg);
       return;
     }
-    if (resetToken.trim().length < 16) {
-      const msg = 'Please enter the valid reset token from your email.';
-      setFieldErrors({ resetToken: 'Invalid token' });
+    if (!/^\d{6}$/.test(resetToken.trim())) {
+      const msg = 'Please enter the 6-digit reset code from your email.';
+      setFieldErrors({ resetToken: '6 digits required' });
       setErrorBanner(msg);
       return;
     }
@@ -563,84 +621,12 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {step === 'welcome' ? (
-        <Animated.View
-          style={[
-            styles.welcomeFullScreen,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateX: screenSlideX }],
-            },
-          ]}
+        <SplashScreen
+          showActions
+          onGetStarted={() => navigateStep('register')}
+          onLogin={() => navigateStep('login')}
           testID="welcome-screen"
-        >
-          <Image
-            source={require('../../assets/branding/welcome_wave_bg.png')}
-            style={styles.welcomeWaveBg}
-            resizeMode="cover"
-          />
-
-          {/* Centered Brand Block — Identical to SplashScreen */}
-          <View style={styles.welcomeCenterOverlay} pointerEvents="none">
-            <View style={styles.welcomeCenterBlock}>
-              <View style={styles.welcomeLogoTile}>
-                <Image
-                  source={require('../../assets/branding/artha_icon_dark.png')}
-                  style={styles.welcomeLogoImage}
-                  resizeMode="contain"
-                />
-              </View>
-
-              <Text style={styles.welcomeBrandName} accessibilityRole="header">
-                Artha
-              </Text>
-
-              <Text style={styles.welcomeTagline}>Know. Spend. Grow.</Text>
-            </View>
-          </View>
-
-          {/* Bottom CTA Actions — Animated from Bottom to Top */}
-          <View
-            style={[
-              styles.welcomeBottomContainer,
-              {
-                paddingBottom:
-                  Math.max(insets.bottom, spacing.lg) + spacing.md,
-              },
-            ]}
-          >
-            {renderFeedbackBanners()}
-
-            <Animated.View
-              style={[
-                styles.welcomeBottomActions,
-                {
-                  opacity: welcomeButtonsOpacity,
-                  transform: [{ translateY: welcomeButtonsTranslateY }],
-                },
-              ]}
-            >
-              <AuthPrimaryButton
-                label="Get Started"
-                onPress={() => navigateStep('register')}
-                testID="welcome-get-started-btn"
-              />
-
-              <TouchableOpacity
-                style={styles.welcomeLoginLink}
-                onPress={() => navigateStep('login')}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel="Already have an account? Log in"
-                testID="welcome-signin-btn"
-              >
-                <Text style={styles.welcomeLoginPrompt}>
-                  Already have an account?{' '}
-                  <Text style={styles.welcomeLoginAction}>Log in</Text>
-                </Text>
-              </TouchableOpacity>
-            </Animated.View>
-          </View>
-        </Animated.View>
+        />
       ) : (
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -906,6 +892,30 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
                 testID="otp-code-input"
               />
 
+              {askVerificationPassword ? (
+                <AuthFormInput
+                  label="Password"
+                  placeholder="••••••••"
+                  isPassword
+                  showPassword={showPassword}
+                  onTogglePassword={() => setShowPassword((prev) => !prev)}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="password"
+                  textContentType="password"
+                  value={verificationPassword}
+                  onChangeText={(text) => {
+                    setVerificationPassword(text);
+                    if (fieldErrors.password) {
+                      setFieldErrors((prev) => ({ ...prev, password: null }));
+                    }
+                  }}
+                  errorText={fieldErrors.password}
+                  disabled={isSubmitting}
+                  testID="otp-password-input"
+                />
+              ) : null}
+
               <View style={styles.primaryActionSpacer}>
                 <AuthPrimaryButton
                   label="Verify & Continue"
@@ -948,7 +958,7 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
             <View style={styles.formScreenWrap} testID="forgot-password-screen">
               <AuthBrandHeader
                 title="Reset Password"
-                subtitle="Enter your email to receive a password reset token"
+                subtitle="Enter your email to receive a 6-digit reset code"
               />
 
               {renderFeedbackBanners()}
@@ -975,7 +985,7 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
 
               <View style={styles.primaryActionSpacer}>
                 <AuthPrimaryButton
-                  label="Send Reset Token"
+                  label="Send Reset Code"
                   onPress={handleForgotPassword}
                   loading={isSubmitting}
                   testID="forgot-submit-btn"
@@ -984,7 +994,7 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
 
               <View style={styles.secondaryActionSpacer}>
                 <AuthSecondaryButton
-                  label="I already have a reset token"
+                  label="I already have a reset code"
                   onPress={() => navigateStep('reset_password')}
                   disabled={isSubmitting}
                   testID="have-reset-token-btn"
@@ -1008,7 +1018,7 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
             <View style={styles.formScreenWrap} testID="reset-password-screen">
               <AuthBrandHeader
                 title="Set New Password"
-                subtitle="Enter your reset token and choose a new password"
+                subtitle="Enter your 6-digit code and choose a new password"
               />
 
               {renderFeedbackBanners()}
@@ -1032,13 +1042,16 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
               />
 
               <AuthFormInput
-                label="Reset Token"
-                placeholder="Paste reset token"
-                autoCapitalize="none"
-                autoCorrect={false}
+                label="Reset Code"
+                placeholder="000000"
+                keyboardType="number-pad"
+                maxLength={6}
+                autoComplete="one-time-code"
+                textContentType="oneTimeCode"
+                centerText
                 value={resetToken}
                 onChangeText={(text) => {
-                  setResetToken(text);
+                  setResetToken(text.replace(/\D/g, ''));
                   if (fieldErrors.resetToken) {
                     setFieldErrors((prev) => ({ ...prev, resetToken: null }));
                   }
@@ -1095,190 +1108,192 @@ export const AuthFlowNavigator: React.FC<AuthFlowNavigatorProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.background,
-    position: 'relative',
-  },
-  welcomeFullScreen: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.background,
-    justifyContent: 'flex-end',
-  },
-  welcomeWaveBg: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-  },
-  welcomeCenterOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  welcomeCenterBlock: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 56,
-  },
-  welcomeLogoTile: {
-    width: 88,
-    height: 88,
-    borderRadius: 24,
-    marginBottom: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  welcomeLogoImage: {
-    width: 88,
-    height: 88,
-    borderRadius: 22,
-  },
-  welcomeBrandName: {
-    fontSize: 40,
-    fontWeight: '800',
-    color: colors.navyDeep,
-    letterSpacing: -0.5,
-    textAlign: 'center',
-    fontFamily: Platform.select({
-      ios: 'AvenirNext-Bold',
-      android: 'sans-serif-medium',
-      default: 'System',
-    }),
-  },
-  welcomeTagline: {
-    marginTop: 8,
-    fontSize: 14.5,
-    fontWeight: '600',
-    color: colors.textMuted,
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  welcomeBottomContainer: {
-    width: '100%',
-    maxWidth: 448,
-    alignSelf: 'center',
-    paddingHorizontal: spacing.xxl,
-  },
-  welcomeBottomActions: {
-    width: '100%',
-    paddingBottom: spacing.sm,
-  },
-  welcomeLoginLink: {
-    minHeight: 44,
-    marginTop: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  welcomeLoginPrompt: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.navyDeep,
-  },
-  welcomeLoginAction: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.navyDeep,
-    textDecorationLine: 'underline',
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: spacing.xxl,
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.xxl,
-    justifyContent: 'center',
-  },
-  contentWrap: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 400,
-    alignSelf: 'center',
-    justifyContent: 'center',
-  },
-  formScreenWrap: {
-    width: '100%',
-    paddingVertical: spacing.md,
-  },
-  errorBanner: {
-    backgroundColor: colors.negativeBg,
-    borderWidth: 1,
-    borderColor: 'rgba(220, 38, 38, 0.28)',
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  errorBannerText: {
-    color: colors.negative,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  infoBanner: {
-    backgroundColor: colors.surfacePaleBlue,
-    borderWidth: 1,
-    borderColor: 'rgba(10, 40, 85, 0.14)',
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  infoBannerText: {
-    color: colors.navyDeep,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  forgotPasswordRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: -4,
-    marginBottom: spacing.xl,
-  },
-  forgotLinkBtn: {
-    minHeight: 32,
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  forgotLinkText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.navyDeep,
-    textDecorationLine: 'underline',
-  },
-  primaryActionSpacer: {
-    marginTop: spacing.xs,
-  },
-  secondaryActionSpacer: {
-    marginTop: spacing.md,
-  },
-  footerSwitchBtn: {
-    minHeight: 44,
-    marginTop: spacing.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footerSwitchPrompt: {
-    fontSize: 13.5,
-    fontWeight: '500',
-    color: colors.textSecondary,
-  },
-  footerSwitchAction: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: colors.navyDeep,
-    textDecorationLine: 'underline',
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    root: {
+      flex: 1,
+      backgroundColor: c.background,
+      position: 'relative',
+    },
+    welcomeFullScreen: {
+      flex: 1,
+      width: '100%',
+      height: '100%',
+      backgroundColor: c.background,
+      justifyContent: 'space-between',
+    },
+    welcomeUpperBody: {
+      flex: 1,
+      width: '100%',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    welcomeWaveBg: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: '100%',
+      height: '100%',
+    },
+    welcomeCenterOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    welcomeCenterBlock: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingBottom: 56,
+    },
+    welcomeLogoTile: {
+      width: 88,
+      height: 88,
+      borderRadius: 24,
+      marginBottom: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    welcomeBrandName: {
+      fontSize: 40,
+      fontWeight: '800',
+      color: c.textPrimary,
+      letterSpacing: -0.5,
+      textAlign: 'center',
+      fontFamily: Platform.select({
+        ios: 'AvenirNext-Bold',
+        android: 'sans-serif-medium',
+        default: 'System',
+      }),
+    },
+    welcomeTagline: {
+      marginTop: 8,
+      fontSize: 14.5,
+      fontWeight: '600',
+      color: c.textMuted,
+      letterSpacing: 0.6,
+      textAlign: 'center',
+    },
+    welcomeBottomContainer: {
+      width: '100%',
+      maxWidth: 448,
+      alignSelf: 'center',
+      paddingHorizontal: spacing.xxl,
+    },
+    welcomeBottomActions: {
+      width: '100%',
+      paddingBottom: spacing.sm,
+    },
+    welcomeLoginLink: {
+      minHeight: 44,
+      marginTop: spacing.sm,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    welcomeLoginPrompt: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: isDark ? c.textSecondary : '#031D44',
+    },
+    welcomeLoginAction: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: isDark ? c.accent : '#031D44',
+      textDecorationLine: 'underline',
+    },
+    scrollContent: {
+      flexGrow: 1,
+      paddingHorizontal: spacing.xxl,
+      paddingTop: spacing.xxl,
+      paddingBottom: spacing.xxl,
+      justifyContent: 'center',
+    },
+    contentWrap: {
+      flex: 1,
+      width: '100%',
+      maxWidth: 400,
+      alignSelf: 'center',
+      justifyContent: 'center',
+    },
+    formScreenWrap: {
+      width: '100%',
+      paddingVertical: spacing.md,
+    },
+    errorBanner: {
+      backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : c.negativeBg,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(220, 38, 38, 0.28)',
+      borderRadius: borderRadius.lg,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      marginBottom: spacing.lg,
+    },
+    errorBannerText: {
+      color: c.negative,
+      fontSize: 13,
+      fontWeight: '600',
+      textAlign: 'center',
+      lineHeight: 18,
+    },
+    infoBanner: {
+      backgroundColor: isDark ? 'rgba(245, 138, 7, 0.1)' : c.surfacePaleBlue,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(245, 138, 7, 0.25)' : 'rgba(10, 40, 85, 0.14)',
+      borderRadius: borderRadius.lg,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      marginBottom: spacing.lg,
+    },
+    infoBannerText: {
+      color: isDark ? c.textPrimary : '#031D44',
+      fontSize: 13,
+      fontWeight: '600',
+      textAlign: 'center',
+      lineHeight: 18,
+    },
+    forgotPasswordRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      marginTop: -4,
+      marginBottom: spacing.xl,
+    },
+    forgotLinkBtn: {
+      minHeight: 32,
+      justifyContent: 'center',
+      paddingHorizontal: 4,
+    },
+    forgotLinkText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: isDark ? c.accent : '#031D44',
+      textDecorationLine: 'underline',
+    },
+    primaryActionSpacer: {
+      marginTop: spacing.xs,
+    },
+    secondaryActionSpacer: {
+      marginTop: spacing.md,
+    },
+    footerSwitchBtn: {
+      minHeight: 44,
+      marginTop: spacing.xl,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    footerSwitchPrompt: {
+      fontSize: 13.5,
+      fontWeight: '500',
+      color: c.textSecondary,
+    },
+    footerSwitchAction: {
+      fontSize: 13.5,
+      fontWeight: '700',
+      color: isDark ? c.accent : '#031D44',
+      textDecorationLine: 'underline',
+    },
+  });

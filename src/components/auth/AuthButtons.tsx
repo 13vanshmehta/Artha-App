@@ -7,7 +7,9 @@ import {
   View,
 } from 'react-native';
 import { Icon } from '../common/Icon';
-import { colors } from '../../theme/colors';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 import { borderRadius, spacing } from '../../theme/spacing';
 
 interface AuthButtonProps {
@@ -27,6 +29,8 @@ export const AuthPrimaryButton: React.FC<AuthButtonProps> = ({
   testID,
   accessibilityLabel,
 }) => {
+  const { isDark, colors: themeColors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const isDisabled = disabled || loading;
 
   return (
@@ -41,7 +45,7 @@ export const AuthPrimaryButton: React.FC<AuthButtonProps> = ({
       testID={testID}
     >
       {loading ? (
-        <ActivityIndicator color={colors.white} />
+        <ActivityIndicator color={isDark ? themeColors.onAccent : '#FFFFFF'} />
       ) : (
         <Text style={styles.primaryButtonText}>{label}</Text>
       )}
@@ -56,6 +60,8 @@ export const AuthSecondaryButton: React.FC<AuthButtonProps> = ({
   testID,
   accessibilityLabel,
 }) => {
+  const styles = useThemedStyles(makeStyles);
+
   return (
     <TouchableOpacity
       style={[styles.secondaryButton, disabled && styles.buttonDisabled]}
@@ -91,6 +97,8 @@ export const SocialAuthGroup: React.FC<SocialAuthGroupProps> = ({
   googleTestID = 'login-google-btn',
   appleTestID = 'login-apple-btn',
 }) => {
+  const { colors: themeColors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const isGoogleDisabled = disabled || googleLoading;
 
   return (
@@ -119,7 +127,7 @@ export const SocialAuthGroup: React.FC<SocialAuthGroupProps> = ({
           testID={googleTestID}
         >
           {googleLoading ? (
-            <ActivityIndicator size="small" color={colors.navyDeep} />
+            <ActivityIndicator size="small" color={themeColors.textPrimary} />
           ) : (
             <>
               <View style={styles.socialIconSlot}>
@@ -145,7 +153,7 @@ export const SocialAuthGroup: React.FC<SocialAuthGroupProps> = ({
           testID={appleTestID}
         >
           <View style={styles.socialIconSlot}>
-            <Icon name="apple" size={18} color={colors.navyDeep} />
+            <Icon name="apple" size={18} color={themeColors.textPrimary} />
           </View>
           <Text style={styles.appleBtnText}>Continue with Apple</Text>
         </TouchableOpacity>
@@ -154,100 +162,101 @@ export const SocialAuthGroup: React.FC<SocialAuthGroupProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  primaryButton: {
-    minHeight: 54,
-    borderRadius: borderRadius.round,
-    backgroundColor: colors.navyDeep,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: 15,
-  },
-  primaryButtonText: {
-    color: colors.white,
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  secondaryButton: {
-    minHeight: 50,
-    borderRadius: borderRadius.round,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(10, 40, 85, 0.14)',
-  },
-  secondaryButtonText: {
-    color: colors.navyDeep,
-    fontSize: 14.5,
-    fontWeight: '700',
-  },
-  socialContainer: {
-    marginTop: spacing.lg,
-    width: '100%',
-    alignItems: 'center',
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '72%',
-    marginBottom: spacing.md,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(10, 40, 85, 0.12)',
-  },
-  dividerLabel: {
-    fontSize: 11.5,
-    fontWeight: '600',
-    color: colors.textMuted,
-    marginHorizontal: spacing.md,
-    letterSpacing: 0.5,
-  },
-  socialButtonsColumn: {
-    width: '100%',
-    gap: spacing.sm,
-  },
-  socialPillBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 50,
-    width: '100%',
-    borderRadius: borderRadius.round,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: 'rgba(10, 40, 85, 0.12)',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: 12,
-    gap: 10,
-  },
-  applePillBtn: {
-    backgroundColor: colors.white,
-    borderColor: 'rgba(10, 40, 85, 0.12)',
-  },
-  socialIconSlot: {
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleBtnText: {
-    fontSize: 14.5,
-    fontWeight: '600',
-    color: colors.navyDeep,
-  },
-  appleBtnText: {
-    fontSize: 14.5,
-    fontWeight: '600',
-    color: colors.navyDeep,
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    primaryButton: {
+      minHeight: 54,
+      borderRadius: borderRadius.round,
+      backgroundColor: isDark ? c.accent : '#031D44',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xl,
+      paddingVertical: 15,
+    },
+    primaryButtonText: {
+      color: isDark ? c.onAccent : '#FFFFFF',
+      fontSize: 16,
+      fontWeight: '700',
+      letterSpacing: 0.2,
+    },
+    buttonDisabled: {
+      opacity: 0.6,
+    },
+    secondaryButton: {
+      minHeight: 50,
+      borderRadius: borderRadius.round,
+      backgroundColor: c.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xl,
+      paddingVertical: 13,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : 'rgba(10, 40, 85, 0.14)',
+    },
+    secondaryButtonText: {
+      color: isDark ? c.textPrimary : '#031D44',
+      fontSize: 14.5,
+      fontWeight: '700',
+    },
+    socialContainer: {
+      marginTop: spacing.lg,
+      width: '100%',
+      alignItems: 'center',
+    },
+    dividerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      width: '72%',
+      marginBottom: spacing.md,
+    },
+    dividerLine: {
+      flex: 1,
+      height: 1,
+      backgroundColor: isDark ? c.border : 'rgba(10, 40, 85, 0.12)',
+    },
+    dividerLabel: {
+      fontSize: 11.5,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginHorizontal: spacing.md,
+      letterSpacing: 0.5,
+    },
+    socialButtonsColumn: {
+      width: '100%',
+      gap: spacing.sm,
+    },
+    socialPillBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 50,
+      width: '100%',
+      borderRadius: borderRadius.round,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : 'rgba(10, 40, 85, 0.12)',
+      paddingHorizontal: spacing.xl,
+      paddingVertical: 12,
+      gap: 10,
+    },
+    applePillBtn: {
+      backgroundColor: c.surface,
+      borderColor: isDark ? c.border : 'rgba(10, 40, 85, 0.12)',
+    },
+    socialIconSlot: {
+      width: 20,
+      height: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    googleBtnText: {
+      fontSize: 14.5,
+      fontWeight: '600',
+      color: c.textPrimary,
+    },
+    appleBtnText: {
+      fontSize: 14.5,
+      fontWeight: '600',
+      color: c.textPrimary,
+    },
+  });

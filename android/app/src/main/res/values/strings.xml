@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Artha</string>
+    <string name="shortcut_add_expense_short">Add Expense</string>
+    <string name="shortcut_add_expense_long">Record an expense in Artha</string>
+    <string name="shortcut_voice_expense_short">Voice Expense</string>
+    <string name="shortcut_voice_expense_long">Record expense using voice intent</string>
 </resources>

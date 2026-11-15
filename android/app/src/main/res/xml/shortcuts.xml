@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="shortcut_new_expense"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_add_expense_short"
+        android:shortcutLongLabel="@string/shortcut_add_expense_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.frontend"
+            android:targetClass="com.frontend.MainActivity"
+            android:data="artha://expense/new?source=shortcut" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="shortcut_voice_expense"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_voice_expense_short"
+        android:shortcutLongLabel="@string/shortcut_voice_expense_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.frontend"
+            android:targetClass="com.frontend.MainActivity"
+            android:data="artha://voice?source=shortcut" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

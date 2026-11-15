@@ -24,6 +24,7 @@ import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { colors } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 import { Icon } from './Icon';
+import { useTheme } from '../../context/ThemeContext';
 
 interface AccountPageSheetModalProps {
   visible: boolean;
@@ -77,6 +78,8 @@ export const AccountPageSheetModal: React.FC<AccountPageSheetModalProps> = ({
 }) => {
   const insets = useContext(SafeAreaInsetsContext) ?? DEFAULT_INSETS;
   const { height: screenHeight } = useWindowDimensions();
+  const { isDark, colors: themeColors } = useTheme();
+  const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
   const isIOS = Platform.OS === 'ios';
   const isJest = typeof jest !== 'undefined';
 
@@ -87,10 +90,13 @@ export const AccountPageSheetModal: React.FC<AccountPageSheetModalProps> = ({
   const contentRiseY = useRef(new Animated.Value(18)).current;
   const contentOpacity = useRef(new Animated.Value(0)).current;
 
-  // Top safe-area clearance so the background Account screen peeks through cleanly
-  const topClearance = isIOS
-    ? Math.max(insets.top, 44) + 12
-    : Math.max(insets.top, StatusBar.currentHeight ?? 28) + 12;
+  // Top clearance leaves the Account header and profile card visible in the background,
+  // matching the reference screenshot design (~22-24% from the top).
+  const minClearance = isIOS
+    ? Math.max(insets.top, 44) + 165
+    : Math.max(insets.top, StatusBar.currentHeight ?? 28) + 165;
+
+  const topClearance = Math.max(Math.round(screenHeight * 0.225), minClearance);
 
   const sheetHeight = Math.max(screenHeight - topClearance, 320);
 
@@ -326,7 +332,7 @@ export const AccountPageSheetModal: React.FC<AccountPageSheetModalProps> = ({
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             testID={closeButtonTestID}
           >
-            <Icon name="chevronLeft" size={18} color={colors.navyPrimary} />
+            <Icon name="chevronLeft" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
           </TouchableOpacity>
 
           <Text style={styles.headerTopLabel} numberOfLines={1}>
@@ -424,120 +430,129 @@ export const AccountPageSheetModal: React.FC<AccountPageSheetModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlayRoot: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  iosKeyboardWrap: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(5, 19, 41, 0.48)',
-  },
-  backdropPressable: {
-    flex: 1,
-  },
-  sheetCard: {
-    width: '100%',
-    backgroundColor: '#FAFCFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    overflow: 'hidden',
-    shadowColor: '#051329',
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    elevation: 24,
-  },
-  sheetBody: {
-    flex: 1,
-    minHeight: 0,
-    backgroundColor: '#FAFCFF',
-  },
-  animatedContentWrap: {
-    flex: 1,
-    minHeight: 0,
-  },
-  grabberTouchArea: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 12,
-    paddingBottom: 10,
-    backgroundColor: '#FAFCFF',
-  },
-  grabberPill: {
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(10, 40, 85, 0.2)',
-  },
-  grabberPillActive: {
-    width: 52,
-    backgroundColor: 'rgba(10, 40, 85, 0.35)',
-  },
-  headerWrap: {
-    paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.sm + 2,
-    backgroundColor: '#FAFCFF',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(10, 40, 85, 0.08)',
-  },
-  headerTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs + 2,
-  },
-  backCircleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(111, 181, 238, 0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTopLabel: {
-    fontSize: 15.5,
-    fontWeight: '700',
-    color: colors.navyDeep,
-  },
-  headerSpacer: {
-    width: 36,
-  },
-  rightActionBtn: {
-    minWidth: 36,
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 4,
-  },
-  rightActionText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.heroGradientStart,
-  },
-  rightActionTextDisabled: {
-    opacity: 0.45,
-  },
-  headerTitle: {
-    fontSize: 21,
-    fontWeight: '800',
-    color: colors.navyDeep,
-    letterSpacing: -0.4,
-    marginTop: 2,
-  },
-  headerSub: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginTop: 3,
-    lineHeight: 18,
-  },
-});
+const createStyles = (themeColors: typeof colors, isDark: boolean) =>
+  StyleSheet.create({
+    overlayRoot: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+    iosKeyboardWrap: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+    backdrop: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(5, 19, 41, 0.48)',
+    },
+    backdropPressable: {
+      flex: 1,
+    },
+    sheetCard: {
+      width: '100%',
+      backgroundColor: isDark ? '#000000' : '#FAFCFF',
+      borderTopLeftRadius: 32,
+      borderTopRightRadius: 32,
+      borderTopWidth: isDark ? 1 : 0,
+      borderLeftWidth: isDark ? 1 : 0,
+      borderRightWidth: isDark ? 1 : 0,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      overflow: 'hidden',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: -6 },
+      shadowOpacity: isDark ? 0 : 0.16,
+      shadowRadius: 16,
+      elevation: 24,
+    },
+    sheetBody: {
+      flex: 1,
+      minHeight: 0,
+      backgroundColor: isDark ? '#000000' : '#FAFCFF',
+    },
+    animatedContentWrap: {
+      flex: 1,
+      minHeight: 0,
+    },
+    grabberTouchArea: {
+      width: '100%',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingTop: 12,
+      paddingBottom: 10,
+      backgroundColor: isDark ? '#000000' : '#FAFCFF',
+    },
+    grabberPill: {
+      width: 44,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(10, 40, 85, 0.2)',
+    },
+    grabberPillActive: {
+      width: 52,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(10, 40, 85, 0.35)',
+    },
+    headerWrap: {
+      paddingHorizontal: spacing.xl,
+      paddingBottom: spacing.sm + 2,
+      backgroundColor: isDark ? '#000000' : '#FAFCFF',
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(10, 40, 85, 0.08)',
+    },
+    headerTopBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.xs + 2,
+    },
+    backCircleBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: isDark ? '#000000' : 'rgba(111, 181, 238, 0.16)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerTopLabel: {
+      fontSize: 13.5,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.navyDeep,
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+    },
+    headerSpacer: {
+      width: 36,
+    },
+    rightActionBtn: {
+      minWidth: 36,
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      paddingVertical: 4,
+      paddingHorizontal: 4,
+    },
+    rightActionText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: isDark ? '#F58A07' : colors.heroGradientStart,
+    },
+    rightActionTextDisabled: {
+      opacity: 0.45,
+    },
+    headerTitle: {
+      fontSize: 21,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.navyDeep,
+      letterSpacing: -0.4,
+      marginTop: 2,
+    },
+    headerSub: {
+      fontSize: 13,
+      color: isDark ? 'rgba(255, 255, 255, 0.85)' : colors.textSecondary,
+      marginTop: 3,
+      lineHeight: 18,
+    },
+  });

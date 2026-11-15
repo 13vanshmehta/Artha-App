@@ -56,7 +56,15 @@ jest.mock('@react-native-google-signin/google-signin', () => ({
     hasPlayServices: jest.fn(async () => true),
     signIn: jest.fn(async () => ({
       type: 'success',
-      data: { idToken: 'mock-google-id-token' },
+      data: {
+        idToken: 'mock-google-id-token',
+        user: {
+          id: 'google-user-123',
+          name: 'Vansh Mehta',
+          email: 'vansh.mehta@example.com',
+          photo: 'https://lh3.googleusercontent.com/a/default-user',
+        },
+      },
     })),
     signOut: jest.fn(async () => null),
   },
@@ -90,3 +98,54 @@ jest.mock('@invertase/react-native-apple-authentication', () => ({
     })),
   },
 }));
+
+jest.mock('lucide-react-native', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        const MockIcon = (props) =>
+          React.createElement(View, {
+            ...props,
+            testID: `lucide-icon-${String(prop)}`,
+          });
+        MockIcon.displayName = `Lucide${String(prop)}`;
+        return MockIcon;
+      },
+    },
+  );
+});
+
+jest.mock('react-native-svg', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const Component = (props) => React.createElement(View, props);
+  return {
+    __esModule: true,
+    default: Component,
+    Svg: Component,
+    Circle: Component,
+    Ellipse: Component,
+    G: Component,
+    Text: Component,
+    TSpan: Component,
+    TextPath: Component,
+    Path: Component,
+    Polygon: Component,
+    Polyline: Component,
+    Line: Component,
+    Rect: Component,
+    Use: Component,
+    Image: Component,
+    Symbol: Component,
+    Defs: Component,
+    LinearGradient: Component,
+    RadialGradient: Component,
+    Stop: Component,
+    ClipPath: Component,
+    Pattern: Component,
+    Mask: Component,
+  };
+});
