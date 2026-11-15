@@ -161,7 +161,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({
           ]}
           testID={`toast-icon-${item.type}`}
         >
-          <Icon name={visuals.iconName} size={17} color="#FFFFFF" />
+          <Icon name={visuals.iconName} size={15} color="#FFFFFF" />
         </View>
 
         {/* Center text block */}
@@ -175,10 +175,10 @@ export const ToastCard: React.FC<ToastCardProps> = ({
               {item.title}
             </Text>
           ) : null}
-          {item.type !== 'error' && item.message ? (
+          {item.message && item.message !== item.title ? (
             <Text
               style={styles.messageText}
-              numberOfLines={3}
+              numberOfLines={2}
               testID={`toast-message-${item.type}`}
             >
               {item.message}
@@ -212,7 +212,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({
           accessibilityLabel={`Dismiss ${item.title || item.type} notification`}
           testID={`toast-close-${item.id}`}
         >
-          <Icon name="close" size={14} color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'} />
+          <Icon name="close" size={13} color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'} />
         </TouchableOpacity>
       </View>
 
@@ -289,39 +289,39 @@ const makeStyles = (c: Palette, isDark: boolean) =>
   StyleSheet.create({
     hostContainer: {
       position: 'absolute',
-      left: spacing.lg,
-      right: spacing.lg,
+      left: spacing.md,
+      right: spacing.md,
       zIndex: 100000,
       elevation: 1000,
       alignItems: 'center',
-      gap: spacing.sm,
+      gap: spacing.xs,
     },
     card: {
       width: '100%',
-      maxWidth: 440,
-      backgroundColor: isDark ? '#000000' : c.white,
-      borderRadius: 14,
+      maxWidth: 400,
+      backgroundColor: isDark ? '#141419' : c.white,
+      borderRadius: 13,
       overflow: 'hidden',
       borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.08)',
-      shadowColor: isDark ? 'transparent' : '#01151E',
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: isDark ? 0 : 0.12,
-      shadowRadius: 16,
-      elevation: isDark ? 0 : 8,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 23, 42, 0.08)',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.3 : 0.08,
+      shadowRadius: 12,
+      elevation: isDark ? 4 : 6,
     },
     cardBody: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingLeft: 14,
+      paddingLeft: 12,
       paddingRight: 8,
-      paddingVertical: 12,
-      gap: 12,
+      paddingVertical: 10,
+      gap: 10,
     },
     statusCircle: {
-      width: 32,
-      height: 32,
-      borderRadius: 16,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -330,42 +330,42 @@ const makeStyles = (c: Palette, isDark: boolean) =>
       justifyContent: 'center',
     },
     titleText: {
-      fontSize: 14,
-      fontWeight: '700',
+      fontSize: 13.5,
+      fontWeight: '600',
       color: isDark ? '#FFFFFF' : '#1E293B',
-      lineHeight: 19,
+      lineHeight: 18,
     },
     messageText: {
-      fontSize: 13,
-      fontWeight: '500',
-      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#475569',
-      lineHeight: 18,
-      marginTop: 1,
+      fontSize: 12,
+      fontWeight: '400',
+      color: isDark ? 'rgba(255, 255, 255, 0.65)' : '#475569',
+      lineHeight: 16,
+      marginTop: 2,
     },
     closeButton: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
       alignItems: 'center',
       justifyContent: 'center',
     },
     actionButton: {
       alignSelf: 'flex-start',
       backgroundColor: isDark ? '#F58A07' : '#0F172A',
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 7,
-      marginTop: 6,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      borderRadius: 6,
+      marginTop: 5,
     },
     actionButtonText: {
       color: isDark ? '#000000' : '#FFFFFF',
       fontSize: 11,
-      fontWeight: '700',
-      letterSpacing: 0.3,
+      fontWeight: '600',
+      letterSpacing: 0.2,
     },
     progressTrack: {
-      height: 3,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      height: 2.5,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.10)' : '#F1F5F9',
       width: '100%',
       overflow: 'hidden',
     },

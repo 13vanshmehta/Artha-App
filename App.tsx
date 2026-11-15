@@ -28,7 +28,16 @@ import { AppLockScreen } from './src/screens/auth/AppLockScreen';
 import { BiometricOnboardingScreen } from './src/screens/auth/BiometricOnboardingScreen';
 import { SplashScreen } from './src/components/splash/SplashScreen';
 import { TransactionModal } from './src/components/finance/TransactionModal';
-import { mockTransactions, MockTransaction } from './src/mock';
+import {
+  CreateTransactionDto,
+  Transaction,
+  TransactionType,
+  UpdateTransactionDto,
+} from './src/api/types';
+import { transactionsApi } from './src/api/transactions';
+import { queryClient } from './src/state/queryClient';
+import { notificationService } from './src/services/notificationService';
+import { formatPaise } from './src/utils/money';
 
 const TAB_ORDER: TabKey[] = ['Home', 'PE Tracker', 'Groups', 'Account'];
 
@@ -36,7 +45,7 @@ function AppContent() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { status, user } = useAuth();
-  const { theme, isDark, colors } = useTheme();
+  const { isDark } = useTheme();
 
   // Default launch screen: brand lockup only, no buttons. Shown until the
   // local auth check resolves and its own minimum duration has elapsed.
@@ -44,7 +53,6 @@ function AppContent() {
 
   const [currentTab, setCurrentTab] = useState<TabKey>('Home');
   const [isScrolling, setIsScrolling] = useState(false);
-  const [expenses, setExpenses] = useState<MockTransaction[]>(mockTransactions);
 
   // Horizontal scroll driver
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -73,7 +81,10 @@ function AppContent() {
     prevUserIdRef.current = user?.id;
 
     if (statusChanged || isNewUser) {
-      // Whenever leaving or entering authenticated state, reset to Home tab
+      // Whenever leaving or entering authenticated state, reset to Home tab and clear sensitive server state cache
+      if (status !== 'authenticated') {
+        queryClient.clear();
+      }
       setCurrentTab('Home');
       currentTabRef.current = 'Home';
       isProgrammaticScrollRef.current = false;
@@ -150,79 +161,152 @@ function AppContent() {
 
   // Transaction Modal State
   const [modalVisible, setModalVisible] = useState(false);
-  const [modalDefaultType, setModalDefaultType] = useState<'expense' | 'income'>('expense');
-  const [editingTransaction, setEditingTransaction] = useState<MockTransaction | null>(null);
+  const [modalDefaultType, setModalDefaultType] = useState<TransactionType>(TransactionType.EXPENSE);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
 
-  const handleOpenAdd = (type: 'expense' | 'income' = 'expense') => {
+  const handleOpenAdd = (type: TransactionType = TransactionType.EXPENSE) => {
     setEditingTransaction(null);
     setModalDefaultType(type);
     setModalVisible(true);
   };
 
-  const handleOpenEdit = (item: MockTransaction) => {
+  const handleOpenEdit = (item: Transaction) => {
     setEditingTransaction(item);
-    setModalDefaultType(item.type || 'expense');
+    setModalDefaultType(item.type || TransactionType.EXPENSE);
     setModalVisible(true);
   };
 
-  const handleSaveTransaction = (
-    data: {
-      title: string;
-      merchant: string;
-      category: string;
-      amount: number;
-      type: 'expense' | 'income';
-      paymentMethod: string;
-      notes?: string;
-      incurredAt?: string;
-    },
-    existingId?: string,
-  ) => {
-    if (existingId) {
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === existingId
-            ? {
-                ...item,
-                merchant: data.merchant,
-                category: data.category,
-                amount: data.amount,
-                type: data.type,
-                paymentMethod: data.paymentMethod,
-                notes: data.notes,
-              }
-            : item,
-        ),
-      );
-      toast.success(
-        `Updated ₹${data.amount} for ${data.merchant}.`,
-        'Transaction Saved',
-      );
-    } else {
-      const created: MockTransaction = {
-        id: `tx_${Date.now()}`,
-        merchant: data.merchant,
-        category: data.category,
-        amount: data.amount,
-        type: data.type,
-        dateStr: 'Today',
-        timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        dateGroup: 'Today',
-        paymentMethod: data.paymentMethod,
-        notes: data.notes,
-      };
-      setExpenses((prev) => [created, ...prev]);
-      toast.success(
-        `Added ₹${created.amount} for ${created.merchant}.`,
-        data.type === 'income' ? 'Income Logged' : 'Expense Logged',
-      );
-    }
-    setModalVisible(false);
+  const handleDuplicateTransaction = (item: Transaction) => {
+    // Pre-fill fields but strip ID and idempotency key so it records as a brand new transaction
+    setEditingTransaction({
+      ...item,
+      id: '',
+      clientTransactionId: undefined,
+    } as any);
+    setModalDefaultType(item.type || TransactionType.EXPENSE);
+    setModalVisible(true);
+    toast.info('Review and save duplicate transaction.', 'Duplicate Ready');
   };
 
-  const handleDeleteTransaction = (id: string) => {
-    setExpenses((prev) => prev.filter((item) => item.id !== id));
-    toast.info('Transaction removed.', 'Deleted');
+  const handleSaveTransaction = async (
+    data: CreateTransactionDto | UpdateTransactionDto,
+    existingId?: string,
+  ) => {
+    try {
+      if (existingId) {
+        const updated = await transactionsApi.updateTransaction(
+          existingId,
+          data as UpdateTransactionDto,
+        );
+        queryClient.invalidateQueries(['transactions']);
+        queryClient.invalidateQueries(['home']);
+        const displayAmt = formatPaise(updated.amount);
+        const label = updated.merchant || updated.category || 'Transaction';
+        toast.success(
+          `Updated ${displayAmt} for ${label}.`,
+          'Transaction Saved',
+        );
+        // Real-time notification & system tray notification
+        notificationService.addNotification({
+          title: 'Transaction Updated',
+          message: `${label} was updated to ${displayAmt}.`,
+          iconName: 'Check',
+          iconColor: '#3B82F6',
+          iconBg: '#EFF6FF',
+          payload: { transactionId: updated.id },
+        });
+      } else {
+        const created = await transactionsApi.createTransaction(
+          data as CreateTransactionDto,
+        );
+        queryClient.invalidateQueries(['transactions']);
+        queryClient.invalidateQueries(['home']);
+        const displayAmt = formatPaise(created.amount);
+        const label = created.merchant || created.category || 'Transaction';
+        toast.success(
+          `Added ${displayAmt} for ${label}.`,
+          created.type === TransactionType.INCOME ? 'Income Logged' : 'Transaction Logged',
+        );
+
+        // Real-time notification & system tray notification based on transaction type
+        if (created.type === TransactionType.EXPENSE) {
+          notificationService.addNotification({
+            title: 'Expense Recorded',
+            message: `${displayAmt} paid for ${label}.`,
+            iconName: 'ArrowUpRight',
+            iconColor: '#EF4444',
+            iconBg: '#FEE2E2',
+            payload: { transactionId: created.id, type: created.type },
+          });
+        } else if (created.type === TransactionType.INCOME) {
+          notificationService.addNotification({
+            title: 'Income Credited',
+            message: `${displayAmt} received from ${label}.`,
+            iconName: 'ArrowDownLeft',
+            iconColor: '#16A34A',
+            iconBg: '#DCFCE7',
+            payload: { transactionId: created.id, type: created.type },
+          });
+        } else if (created.type === TransactionType.TRANSFER) {
+          notificationService.addNotification({
+            title: 'Transfer Completed',
+            message: `Transferred ${displayAmt} between accounts.`,
+            iconName: 'ArrowRight',
+            iconColor: '#2563EB',
+            iconBg: '#DBEAFE',
+            payload: { transactionId: created.id, type: created.type },
+          });
+        } else if (created.type === TransactionType.REFUND) {
+          notificationService.addNotification({
+            title: 'Refund Processed',
+            message: `Refund of ${displayAmt} recorded for ${label}.`,
+            iconName: 'ArrowDownLeft',
+            iconColor: '#0D9488',
+            iconBg: '#CCFBF1',
+            payload: { transactionId: created.id, type: created.type },
+          });
+        } else if (created.type === TransactionType.ADJUSTMENT) {
+          notificationService.addNotification({
+            title: 'Balance Adjusted',
+            message: `Account adjustment of ${displayAmt} applied.`,
+            iconName: 'SlidersHorizontal',
+            iconColor: '#8B5CF6',
+            iconBg: '#EDE9FE',
+            payload: { transactionId: created.id, type: created.type },
+          });
+        }
+      }
+      setModalVisible(false);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save transaction.', 'Error');
+      throw err;
+    }
+  };
+
+  const handleDeleteTransaction = async (id: string, merchant?: string) => {
+    try {
+      await transactionsApi.deleteTransaction(id);
+      queryClient.invalidateQueries(['transactions']);
+      queryClient.invalidateQueries(['home']);
+      toast.action(
+        `Deleted ${merchant || 'transaction'}`,
+        'UNDO',
+        async () => {
+          try {
+            await transactionsApi.restoreTransaction(id);
+            queryClient.invalidateQueries(['transactions']);
+            queryClient.invalidateQueries(['home']);
+            toast.success('Transaction restored.', 'Restored');
+          } catch {
+            toast.error('Unable to restore transaction.', 'Restore Failed');
+          }
+        },
+        'Transaction Removed',
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete transaction.', 'Error');
+      throw err;
+    }
   };
 
   // 0. Default launch splash — logo + wordmark + tagline only, no buttons.
@@ -335,20 +419,20 @@ function AppContent() {
           <HomeScreen
             userName={user?.displayName || 'User'}
             userAvatarUrl={user?.avatarUrl}
-            expenses={expenses}
             onScrollingChange={setIsScrolling}
             onNavigateToTab={handleSelectTab}
             onOpenAddTransaction={handleOpenAdd}
+            onEditTransaction={handleOpenEdit}
           />
         </View>
 
         {/* 2. PE Tracker */}
         <View style={{ width: windowWidth, height: '100%' }}>
           <TrackerScreen
-            expenses={expenses}
             onScrollingChange={setIsScrolling}
             onOpenAddTransaction={handleOpenAdd}
             onEditTransaction={handleOpenEdit}
+            onDuplicateTransaction={handleDuplicateTransaction}
             onDeleteTransaction={handleDeleteTransaction}
           />
         </View>

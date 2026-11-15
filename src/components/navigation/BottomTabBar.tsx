@@ -94,24 +94,25 @@ const TrackerGlyph: React.FC<{ isActive: boolean; color: string; size: number }>
           width="19"
           height="19"
           rx="5.5"
-          fill={color}
+          stroke={color}
+          strokeWidth={2.4}
         />
         <Path
-          d="M7.5 16V13"
-          stroke="#FFFFFF"
-          strokeWidth={2.2}
+          d="M7.5 16V12.5"
+          stroke={color}
+          strokeWidth={2.8}
           strokeLinecap="round"
         />
         <Path
-          d="M12 16V8.5"
-          stroke="#FFFFFF"
-          strokeWidth={2.2}
+          d="M12 16V8"
+          stroke={color}
+          strokeWidth={2.8}
           strokeLinecap="round"
         />
         <Path
-          d="M16.5 16V11"
-          stroke="#FFFFFF"
-          strokeWidth={2.2}
+          d="M16.5 16V10.5"
+          stroke={color}
+          strokeWidth={2.8}
           strokeLinecap="round"
         />
       </Svg>

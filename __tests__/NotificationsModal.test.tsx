@@ -1,8 +1,35 @@
 import React from 'react';
 import ReactTestRenderer, { act } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { NotificationsModal, INITIAL_NOTIFICATIONS } from '../src/screens/NotificationsModal';
+import { NotificationsModal, NotificationItem } from '../src/screens/NotificationsModal';
 import { alert } from '../src/context/AlertContext';
+
+const testNotifications: NotificationItem[] = [
+  {
+    id: 'test-notif-1',
+    title: 'Salary Credited: ₹85,000 received',
+    message: 'Monthly payroll payout credited from TechCorp Solutions to your primary account.',
+    timestamp: '8:00 am',
+    createdAt: Date.now(),
+    dateGroup: 'Today, Nov 15',
+    read: false,
+    iconName: 'ArrowDown',
+    iconColor: '#16A34A',
+    iconBg: '#DCFCE7',
+  },
+  {
+    id: 'test-notif-2',
+    title: 'Budget Alert: 85% used',
+    message: 'You have spent ₹14,200 of your monthly allowance.',
+    timestamp: '6:30 pm',
+    createdAt: Date.now() - 86400000,
+    dateGroup: 'Yesterday, Nov 14',
+    read: true,
+    iconName: 'CircleAlert',
+    iconColor: '#D97706',
+    iconBg: '#FEF3C7',
+  },
+];
 
 const safeAreaMetrics = {
   frame: { x: 0, y: 0, width: 390, height: 844 },
@@ -31,7 +58,7 @@ describe('NotificationsModal', () => {
           <NotificationsModal
             visible={true}
             onClose={onClose}
-            notifications={INITIAL_NOTIFICATIONS}
+            notifications={testNotifications}
             onMarkAsRead={jest.fn()}
             onDeleteNotification={jest.fn()}
             onMarkAllAsRead={jest.fn()}
@@ -82,7 +109,7 @@ describe('NotificationsModal', () => {
           <NotificationsModal
             visible={true}
             onClose={jest.fn()}
-            notifications={INITIAL_NOTIFICATIONS}
+            notifications={testNotifications}
             onMarkAsRead={jest.fn()}
             onDeleteNotification={onDelete}
             onMarkAllAsRead={jest.fn()}
@@ -103,7 +130,7 @@ describe('NotificationsModal', () => {
     });
 
     expect(confirmSpy).not.toHaveBeenCalled();
-    expect(onDelete).toHaveBeenCalledWith(INITIAL_NOTIFICATIONS[0].id);
+    expect(onDelete).toHaveBeenCalledWith(testNotifications[0].id);
 
     confirmSpy.mockRestore();
 

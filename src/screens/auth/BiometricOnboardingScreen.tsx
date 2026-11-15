@@ -17,6 +17,7 @@ import { useThemedStyles } from '../../theme/useThemedStyles';
 import { Palette } from '../../theme/colors';
 import { toast } from '../../context/ToastContext';
 import { formatPlatformBiometryLabel } from '../../services/secureStorage';
+import { notificationService } from '../../services/notificationService';
 import { borderRadius, shadows, spacing } from '../../theme/spacing';
 
 export const BiometricOnboardingScreen: React.FC = () => {
@@ -50,6 +51,13 @@ export const BiometricOnboardingScreen: React.FC = () => {
         `${biometryLabel} app unlock enabled on this device.`,
         'Protection Configured',
       );
+      notificationService.addNotification({
+        title: 'Security: Biometric unlock enabled',
+        message: `${biometryLabel} authentication was activated on this device.`,
+        iconName: 'Shield',
+        iconColor: '#084887',
+        iconBg: '#E0F2FE',
+      });
     } catch (err) {
       const message =
         err instanceof Error

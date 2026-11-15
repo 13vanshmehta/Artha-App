@@ -57,6 +57,24 @@ type ToastListener = (snapshot: ToastStateSnapshot) => void;
 const INTERNAL_DETAIL_PATTERN =
   /ARTHA_|\.env|Client ID|idToken|identityToken|Exception|Stack|Prisma|SQL|Keychain|https?:\/\//i;
 
+function cleanHumanErrorMessage(raw: string): string {
+  let msg = (raw || '').trim();
+  msg = msg.replace(/^Error:\s*/i, '');
+  if (/destinationAccountId.*UUID/i.test(msg) || /sourceAccountId.*UUID/i.test(msg)) {
+    return 'Please select a valid account.';
+  }
+  if (/categoryId.*UUID/i.test(msg)) {
+    return 'Please select a valid category.';
+  }
+  if (/amountMinor/i.test(msg)) {
+    return 'Please enter a valid amount.';
+  }
+  if (/should not exist/i.test(msg)) {
+    return 'Invalid transaction fields.';
+  }
+  return msg;
+}
+
 function resolveSafeErrorTitle(
   rawMessage: string,
   explicitTitle?: string,
@@ -108,7 +126,7 @@ class CentralizedToastManager {
     titleOrOptions?: string | ToastOptions,
     maybeOptions?: number | ToastOptions,
   ): string {
-    const cleanMessage = (message || '').trim();
+    const cleanMessage = cleanHumanErrorMessage(message);
     const extraOptions: ToastOptions =
       typeof maybeOptions === 'number'
         ? { duration: maybeOptions }
@@ -119,6 +137,7 @@ class CentralizedToastManager {
         : titleOrOptions ?? extraOptions;
 
     const isError = type === 'error';
+    const isInternal = isError && INTERNAL_DETAIL_PATTERN.test(cleanMessage);
     const title = isError
       ? resolveSafeErrorTitle(cleanMessage, resolvedOptions.title)
       : (resolvedOptions.title?.trim() || DEFAULT_TOAST_TITLES[type]).trim();
@@ -136,7 +155,13 @@ class CentralizedToastManager {
       console.warn(`[Artha Error Toast] ${title}:`, cleanMessage);
     }
 
-    const displayMessage = isError ? '' : cleanMessage;
+    const displayMessage = isInternal
+      ? ''
+      : isError
+      ? cleanMessage !== title
+        ? cleanMessage
+        : ''
+      : cleanMessage;
 
     const duration =
       typeof resolvedOptions.duration === 'number' &&
@@ -292,6 +317,19 @@ export const toast = {
     options?: number | ToastOptions,
   ) => toastManager.show('error', message, titleOrOptions, options),
 
+  action: (
+    message: string,
+    actionLabel: string,
+    onActionPress: () => void,
+    title?: string,
+    duration = 5000,
+  ) =>
+    toastManager.show('info', message, {
+      title,
+      duration,
+      action: { label: actionLabel, onPress: onActionPress },
+    }),
+
   dismiss: (id: string) => toastManager.dismiss(id),
 
   dismissAll: () => toastManager.dismissAll(),
@@ -306,6 +344,7 @@ export interface ToastContextValue {
   info: typeof toast.info;
   warning: typeof toast.warning;
   error: typeof toast.error;
+  action: typeof toast.action;
   dismiss: typeof toast.dismiss;
   dismissAll: typeof toast.dismissAll;
 }
@@ -331,6 +370,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({
       info: toast.info,
       warning: toast.warning,
       error: toast.error,
+      action: toast.action,
       dismiss: toast.dismiss,
       dismissAll: toast.dismissAll,
     }),
@@ -355,6 +395,7 @@ export function useToast(): ToastContextValue {
     info: toast.info,
     warning: toast.warning,
     error: toast.error,
+    action: toast.action,
     dismiss: toast.dismiss,
     dismissAll: toast.dismissAll,
   };

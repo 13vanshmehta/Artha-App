@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Modal,
   View,
@@ -9,38 +9,55 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { AppIcon } from '../icons/AppIcon';
-import { CATEGORY_ICON_REGISTRY, getCategoryIconConfig } from '../icons/categoryIcons';
-import { ExpenseItem } from '../../data/mockData';
+import { getCategoryIconConfig } from '../icons/categoryIcons';
 import { useTheme } from '../../context/ThemeContext';
-import { useThemedStyles } from '../../theme/useThemedStyles';
-import { Palette } from '../../theme/colors';
+import { colors } from '../../theme/colors';
 import { toast } from '../../context/ToastContext';
 import { alert } from '../../context/AlertContext';
+import {
+  Account,
+  AccountType,
+  AdjustmentDirection,
+  Category,
+  CreateTransactionDto,
+  PaymentMethod,
+  Transaction,
+  TransactionType,
+  UpdateTransactionDto,
+} from '../../api/types';
+import { accountsApi } from '../../api/accounts';
+import { categoriesApi } from '../../api/categories';
+import { queryClient } from '../../state/queryClient';
+import { generateClientTransactionId } from '../../utils/idempotency';
+import { decimalInputToPaiseMinor } from '../../utils/money';
+import { notificationService } from '../../services/notificationService';
 
-interface TransactionModalProps {
+export interface TransactionModalProps {
   visible: boolean;
   onClose: () => void;
   onSave: (
-    transaction: {
-      title: string;
-      merchant: string;
-      category: string;
-      amount: number;
-      type: 'expense' | 'income';
-      paymentMethod: string;
-      notes?: string;
-      incurredAt?: string;
-    },
+    dto: CreateTransactionDto | UpdateTransactionDto,
     existingId?: string,
   ) => Promise<void> | void;
-  onDelete?: (id: string) => Promise<void> | void;
-  initialData?: ExpenseItem | null;
-  defaultType?: 'expense' | 'income';
+  onDelete?: (id: string, merchant?: string) => Promise<void> | void;
+  initialData?: Transaction | null;
+  defaultType?: TransactionType;
 }
 
-const EXPENSE_CATEGORIES = [
+export const PAYMENT_METHOD_OPTIONS: { key: string; label: string }[] = [
+  { key: 'UPI', label: 'UPI' },
+  { key: 'CASH', label: 'Cash' },
+  { key: 'DEBIT_CARD', label: 'Debit Card' },
+  { key: 'CREDIT_CARD', label: 'Credit Card' },
+  { key: 'BANK_TRANSFER', label: 'Bank Transfer' },
+  { key: 'WALLET', label: 'Wallet' },
+  { key: 'OTHER', label: 'Other' },
+];
+
+const DEFAULT_EXPENSE_CATEGORIES = [
   'Food & Dining',
   'Transport',
   'Shopping',
@@ -53,14 +70,48 @@ const EXPENSE_CATEGORIES = [
   'Other',
 ];
 
-const INCOME_CATEGORIES = [
+const DEFAULT_INCOME_CATEGORIES = [
   'Salary',
   'Investments',
+  'Freelance',
   'Gift',
+  'Refund',
   'Other',
 ];
 
-const PAYMENT_METHODS = ['UPI', 'Card', 'Bank', 'Cash'];
+const DEFAULT_FALLBACK_ACCOUNTS: Account[] = [
+  {
+    id: 'acc-cash',
+    name: 'Cash',
+    type: AccountType.CASH,
+    balance: 0,
+    currency: 'INR',
+    isDefault: true,
+  },
+  {
+    id: 'acc-bank',
+    name: 'Primary Bank Account',
+    type: AccountType.BANK,
+    balance: 0,
+    currency: 'INR',
+    isDefault: false,
+  },
+];
+
+export const getAccountEmoji = (type: AccountType | string) => {
+  switch (type) {
+    case AccountType.CASH:
+      return '💵';
+    case AccountType.BANK:
+      return '🏦';
+    case AccountType.WALLET:
+      return '👛';
+    case AccountType.CREDIT_CARD:
+      return '💳';
+    default:
+      return '💰';
+  }
+};
 
 export const TransactionModal: React.FC<TransactionModalProps> = ({
   visible,
@@ -68,42 +119,278 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   onSave,
   onDelete,
   initialData,
-  defaultType = 'expense',
+  defaultType = TransactionType.EXPENSE,
 }) => {
   const { isDark, colors: themeColors } = useTheme();
-  const styles = useThemedStyles(makeStyles);
-  const [type, setType] = useState<'expense' | 'income'>(defaultType);
+  const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
+
+  const [type, setType] = useState<TransactionType>(defaultType);
   const [amount, setAmount] = useState('');
   const [merchant, setMerchant] = useState('');
   const [category, setCategory] = useState('Food & Dining');
-  const [paymentMethod, setPaymentMethod] = useState('UPI');
+  const [categoryId, setCategoryId] = useState<string | undefined>(undefined);
+  const [accountId, setAccountId] = useState<string>('');
+  const [destinationAccountId, setDestinationAccountId] = useState<string>('');
+  const [paymentMethod, setPaymentMethod] = useState<string>('UPI');
   const [notes, setNotes] = useState('');
+  const [reason, setReason] = useState('');
+  const [adjustmentDirection, setAdjustmentDirection] = useState<AdjustmentDirection>(
+    AdjustmentDirection.DECREASE,
+  );
+  const [originalTransactionId, setOriginalTransactionId] = useState('');
+
+  // Accounts & Categories list
+  const [accounts, setAccounts] = useState<Account[]>(DEFAULT_FALLBACK_ACCOUNTS);
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  // New Category inline creation state
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [creatingCategoryLoading, setCreatingCategoryLoading] = useState(false);
+
+  // Add Account Modal State
+  const [isAddingAccount, setIsAddingAccount] = useState(false);
+  const [addAccountTarget, setAddAccountTarget] = useState<'source' | 'destination'>('source');
+  const [newAccountName, setNewAccountName] = useState('');
+  const [newAccountType, setNewAccountType] = useState<AccountType>(AccountType.BANK);
+  const [newAccountBalance, setNewAccountBalance] = useState('');
+  const [addingAccountLoading, setAddingAccountLoading] = useState(false);
+
+  // Submitting state and idempotency key
   const [submitting, setSubmitting] = useState(false);
+  const clientTxIdRef = useRef<string>(generateClientTransactionId());
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Load accounts and categories from backend
+  const loadMetadata = useCallback(async () => {
+    try {
+      const [fetchedAccounts, fetchedCategories] = await Promise.allSettled([
+        accountsApi.getAccounts(),
+        categoriesApi.getCategories(),
+      ]);
+
+      if (!isMountedRef.current) return;
+
+      if (fetchedAccounts.status === 'fulfilled' && fetchedAccounts.value.length > 0) {
+        setAccounts(fetchedAccounts.value);
+        setAccountId((curr) => {
+          if (curr) return curr;
+          const defaultAcc =
+            fetchedAccounts.value.find((a) => a.isDefault) || fetchedAccounts.value[0];
+          return defaultAcc.id;
+        });
+      } else {
+        setAccounts(DEFAULT_FALLBACK_ACCOUNTS);
+        setAccountId((curr) => curr || DEFAULT_FALLBACK_ACCOUNTS[0].id);
+      }
+
+      if (fetchedCategories.status === 'fulfilled' && fetchedCategories.value.length > 0) {
+        setCategories(fetchedCategories.value);
+      }
+    } catch {
+      // Fallback defaults in place
+    }
+  }, []);
+
+  useEffect(() => {
+    if (visible) {
+      loadMetadata();
+    }
+  }, [visible, loadMetadata]);
+
+  // Sync initialData or reset on open
+  useEffect(() => {
+    if (!visible) return;
+
     if (initialData) {
-      setType(initialData.type || 'expense');
+      const initType = initialData.type || TransactionType.EXPENSE;
+      setType(initType);
       setAmount(initialData.amount ? String(initialData.amount) : '');
       setMerchant(initialData.merchant || '');
       setCategory(initialData.category || 'Food & Dining');
+      setCategoryId(initialData.categoryId || undefined);
+
+      const fallbackAccId = accounts[0]?.id || '';
+      if (initType === TransactionType.TRANSFER) {
+        setAccountId(initialData.accountId || fallbackAccId);
+        setDestinationAccountId(initialData.destinationAccountId || '');
+      } else if (initType === TransactionType.INCOME || initType === TransactionType.REFUND) {
+        setAccountId(initialData.destinationAccountId || initialData.accountId || fallbackAccId);
+        setDestinationAccountId('');
+      } else if (initType === TransactionType.ADJUSTMENT) {
+        setAccountId(initialData.accountId || fallbackAccId);
+        setAdjustmentDirection(initialData.adjustmentDirection || AdjustmentDirection.DECREASE);
+      } else {
+        setAccountId(initialData.accountId || fallbackAccId);
+      }
+
       setPaymentMethod(initialData.paymentMethod || 'UPI');
       setNotes(initialData.notes || '');
+      setReason(initialData.notes || '');
+      setOriginalTransactionId(initialData.originalTransactionId || '');
     } else {
       setType(defaultType);
       setAmount('');
       setMerchant('');
-      setCategory(defaultType === 'expense' ? 'Food & Dining' : 'Salary');
+
+      const isIncome = defaultType === TransactionType.INCOME;
+      const initialCatName =
+        isIncome
+          ? 'Salary'
+          : defaultType === TransactionType.REFUND
+          ? 'Refund'
+          : 'Food & Dining';
+      setCategory(initialCatName);
+      const catMatch = categories.find(
+        (c) =>
+          c.name.toLowerCase() === initialCatName.toLowerCase() &&
+          (isIncome ? c.type === 'INCOME' : c.type === 'EXPENSE'),
+      );
+      setCategoryId(catMatch?.id);
+
+      setAccountId((curr) => {
+        if (curr && accounts.some((a) => a.id === curr)) return curr;
+        const defaultAcc = accounts.find((a) => a.isDefault) || accounts[0];
+        return defaultAcc?.id || '';
+      });
+      setDestinationAccountId('');
       setPaymentMethod('UPI');
       setNotes('');
+      setReason('');
+      setAdjustmentDirection(AdjustmentDirection.DECREASE);
+      setOriginalTransactionId('');
+      // Fresh idempotency key for new transaction
+      clientTxIdRef.current = generateClientTransactionId();
     }
+    setIsCreatingCategory(false);
+    setNewCategoryName('');
+    setIsAddingAccount(false);
+    setNewAccountName('');
   }, [initialData, defaultType, visible]);
 
-  const handleTypeChange = (newType: 'expense' | 'income') => {
-    setType(newType);
-    if (newType === 'expense' && !EXPENSE_CATEGORIES.includes(category)) {
-      setCategory('Food & Dining');
-    } else if (newType === 'income' && !INCOME_CATEGORIES.includes(category)) {
-      setCategory('Salary');
+  const handleTypeSelect = (selected: TransactionType) => {
+    setType(selected);
+    const isIncome = selected === TransactionType.INCOME;
+    const catName =
+      isIncome
+        ? 'Salary'
+        : selected === TransactionType.REFUND
+        ? 'Refund'
+        : selected === TransactionType.TRANSFER
+        ? 'Transfer'
+        : selected === TransactionType.ADJUSTMENT
+        ? 'Adjustment'
+        : 'Food & Dining';
+    setCategory(catName);
+    const match = categories.find(
+      (c) =>
+        c.name.toLowerCase() === catName.toLowerCase() &&
+        (isIncome ? c.type === 'INCOME' : c.type === 'EXPENSE'),
+    );
+    setCategoryId(match?.id);
+  };
+
+  const availableCategories = useMemo(() => {
+    const isIncomeType = type === TransactionType.INCOME || type === TransactionType.REFUND;
+    const backendMatching = categories.filter((c) =>
+      isIncomeType ? c.type === 'INCOME' || c.type === 'ALL' : c.type === 'EXPENSE' || c.type === 'ALL',
+    );
+
+    if (backendMatching.length > 0) {
+      return backendMatching.map((c) => ({ id: c.id, name: c.name, isCustom: c.isCustom }));
+    }
+
+    const defaultNames = isIncomeType ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+    return defaultNames.map((name) => ({ id: `default-${name}`, name, isCustom: false }));
+  }, [categories, type]);
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) {
+      toast.error('Please enter a category name.', 'Category Required');
+      return;
+    }
+
+    setCreatingCategoryLoading(true);
+    try {
+      const created = await categoriesApi.createCategory({
+        name: trimmed,
+        icon: 'Tag',
+        color: colors.bluePrimary,
+        type: type === TransactionType.INCOME ? 'INCOME' : 'EXPENSE',
+      });
+      setCategories((prev) => [...prev, created]);
+      setCategory(created.name);
+      setCategoryId(created.id);
+      setIsCreatingCategory(false);
+      setNewCategoryName('');
+      toast.success(`Category "${created.name}" created.`, 'Category Added');
+    } catch {
+      // Local fallback if offline
+      setCategory(trimmed);
+      setIsCreatingCategory(false);
+      setNewCategoryName('');
+      toast.info(`Selected "${trimmed}".`, 'Category Set');
+    } finally {
+      setCreatingCategoryLoading(false);
+    }
+  };
+
+  const handleOpenAddAccount = (target: 'source' | 'destination') => {
+    setAddAccountTarget(target);
+    setNewAccountName('');
+    setNewAccountType(AccountType.BANK);
+    setNewAccountBalance('');
+    setIsAddingAccount(true);
+  };
+
+  const handleCreateAccount = async () => {
+    const trimmedName = newAccountName.trim();
+    if (!trimmedName) {
+      toast.error('Please enter an account name.', 'Account Name Required');
+      return;
+    }
+
+    setAddingAccountLoading(true);
+    try {
+      const initBal = parseFloat(newAccountBalance.trim());
+      const newAcc = await accountsApi.createAccount({
+        name: trimmedName,
+        type: newAccountType,
+        initialBalance: isNaN(initBal) ? 0 : initBal,
+      });
+
+      queryClient.invalidateQueries(['accounts']);
+      queryClient.invalidateQueries(['home']);
+
+      setAccounts((prev) => [...prev, newAcc]);
+      if (addAccountTarget === 'destination') {
+        setDestinationAccountId(newAcc.id);
+      } else {
+        setAccountId(newAcc.id);
+      }
+
+      setIsAddingAccount(false);
+      toast.success(`Account "${newAcc.name}" created.`, 'Account Added');
+      notificationService.addNotification({
+        title: 'Account Linked',
+        message: `New account "${newAcc.name}" has been created.`,
+        iconName: 'Wallet',
+        iconColor: '#084887',
+        iconBg: '#E0F2FE',
+        payload: { accountId: newAcc.id },
+      });
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to create account.', 'Error');
+    } finally {
+      setAddingAccountLoading(false);
     }
   };
 
@@ -114,26 +401,95 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       return;
     }
 
-    const cleanMerchant = merchant.trim() || (type === 'expense' ? category : 'Income Deposit');
+    if (!accountId) {
+      const accountLabel =
+        type === TransactionType.INCOME || type === TransactionType.REFUND
+          ? 'Received Into'
+          : type === TransactionType.EXPENSE
+          ? 'Paid From'
+          : type === TransactionType.TRANSFER
+          ? 'Transfer From'
+          : 'Account';
+      toast.error(`Please select an account for ${accountLabel}.`, 'Account Required');
+      return;
+    }
+
+    if (type === TransactionType.EXPENSE) {
+      if (!category) {
+        toast.error('Please select a category.', 'Category Required');
+        return;
+      }
+      if (!paymentMethod) {
+        toast.error('Please select a payment method.', 'Payment Method Required');
+        return;
+      }
+    } else if (type === TransactionType.INCOME) {
+      if (!category) {
+        toast.error('Please select a category.', 'Category Required');
+        return;
+      }
+    } else if (type === TransactionType.TRANSFER) {
+      if (!destinationAccountId) {
+        toast.error('Please select a destination account for the transfer.', 'Transfer Destination');
+        return;
+      }
+      if (destinationAccountId === accountId) {
+        toast.error('Source and destination accounts cannot be the same.', 'Invalid Transfer');
+        return;
+      }
+    } else if (type === TransactionType.REFUND) {
+      // Amount and Received Into already validated
+    } else if (type === TransactionType.ADJUSTMENT) {
+      if (!reason.trim()) {
+        toast.error('Please provide a reason for the adjustment.', 'Reason Required');
+        return;
+      }
+    }
+
+    let defaultTitle = category;
+    if (type === TransactionType.EXPENSE) {
+      defaultTitle = merchant.trim() || category;
+    } else if (type === TransactionType.INCOME) {
+      defaultTitle = merchant.trim() || 'Income Deposit';
+    } else if (type === TransactionType.TRANSFER) {
+      const fromAcc = accounts.find((a) => a.id === accountId)?.name || 'Account';
+      const toAcc = accounts.find((a) => a.id === destinationAccountId)?.name || 'Account';
+      defaultTitle = `Transfer: ${fromAcc} → ${toAcc}`;
+    } else if (type === TransactionType.REFUND) {
+      defaultTitle = merchant.trim() || 'Refund Received';
+    } else if (type === TransactionType.ADJUSTMENT) {
+      defaultTitle = `Balance Adjustment (${adjustmentDirection === AdjustmentDirection.INCREASE ? '+' : '-'})`;
+    }
+
+    const payload: CreateTransactionDto = {
+      clientTransactionId: clientTxIdRef.current,
+      type,
+      amount: Math.round(numAmount * 100) / 100,
+      amountMinor: decimalInputToPaiseMinor(amount.trim()),
+      category: type === TransactionType.TRANSFER || type === TransactionType.ADJUSTMENT ? '' : category,
+      categoryId: type === TransactionType.TRANSFER || type === TransactionType.ADJUSTMENT ? undefined : categoryId,
+      accountId,
+      destinationAccountId:
+        type === TransactionType.TRANSFER
+          ? destinationAccountId
+          : type === TransactionType.INCOME || type === TransactionType.REFUND
+          ? accountId
+          : undefined,
+      paymentMethod: type === TransactionType.EXPENSE ? paymentMethod : undefined,
+      merchant: merchant.trim() || defaultTitle,
+      notes: type === TransactionType.ADJUSTMENT ? reason.trim() : (notes.trim() || undefined),
+      reason: type === TransactionType.ADJUSTMENT ? reason.trim() : undefined,
+      adjustmentDirection: type === TransactionType.ADJUSTMENT ? adjustmentDirection : undefined,
+      originalTransactionId: type === TransactionType.REFUND && originalTransactionId.trim() ? originalTransactionId.trim() : undefined,
+      incurredAt: initialData?.incurredAt || new Date().toISOString(),
+    };
 
     setSubmitting(true);
     try {
-      await onSave(
-        {
-          title: cleanMerchant,
-          merchant: cleanMerchant,
-          category,
-          amount: numAmount,
-          type,
-          paymentMethod,
-          notes: notes.trim() || undefined,
-          incurredAt: new Date().toISOString(),
-        },
-        initialData?.id,
-      );
+      await onSave(payload, initialData?.id);
       onClose();
     } catch {
-      // Error handled in callback
+      // Retain clientTxIdRef on error for idempotent retry!
     } finally {
       setSubmitting(false);
     }
@@ -143,23 +499,21 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     if (!initialData?.id || !onDelete) return;
     const confirmed = await alert.confirm({
       title: 'Delete Transaction',
-      message: `Are you sure you want to delete this ${initialData.amount ? `₹${initialData.amount} ` : ''}transaction? This action cannot be undone.`,
+      message: `Are you sure you want to delete this ${initialData.amount ? `₹${initialData.amount} ` : ''}transaction? This will reverse any account balance changes.`,
       confirmText: 'Delete',
       cancelText: 'Cancel',
       isDestructive: true,
       icon: 'Trash2',
     });
     if (!confirmed) return;
-    setSubmitting(true);
+
     try {
-      await onDelete(initialData.id);
+      await onDelete(initialData.id, initialData.merchant || undefined);
       onClose();
-    } finally {
-      setSubmitting(false);
-    }
+    } catch {}
   };
 
-  const availableCategories = type === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  const isEditing = Boolean(initialData);
 
   return (
     <Modal
@@ -179,439 +533,1181 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
         />
 
         <View style={styles.sheetContainer}>
-          {/* Sheet Handle */}
-          <View style={styles.handle} />
+          {/* Handle indicator */}
+          <View style={styles.handleBar} />
 
           {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>
-              {initialData ? 'Edit Transaction' : 'Add Transaction'}
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>
+              {isEditing ? 'Edit Transaction' : 'Record Transaction'}
             </Text>
             <TouchableOpacity
-              style={styles.closeBtn}
               onPress={onClose}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.closeBtn}
             >
-              <AppIcon
-                name="X"
-                size={20}
-                color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'}
-              />
+              <AppIcon name="X" size={18} color={isDark ? '#FFFFFF' : '#0F172A'} />
             </TouchableOpacity>
           </View>
 
           <ScrollView
+            style={styles.bodyScroll}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scrollBody}
+            keyboardShouldPersistTaps="handled"
           >
-            {/* Type Selector (Expense vs Income) */}
-            <View style={styles.segmentedControl}>
-              <TouchableOpacity
-                style={[
-                  styles.segmentBtn,
-                  type === 'expense' && styles.segmentBtnActiveExpense,
-                ]}
-                activeOpacity={0.8}
-                onPress={() => handleTypeChange('expense')}
-              >
-                <AppIcon
-                  name="ArrowUpRight"
-                  size={16}
-                  color={
-                    type === 'expense'
-                      ? (isDark ? '#000000' : '#FFFFFF')
-                      : (isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B')
-                  }
-                />
-                <Text
-                  style={[
-                    styles.segmentText,
-                    type === 'expense' && styles.segmentTextActive,
-                  ]}
-                >
-                  Expense
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.segmentBtn,
-                  type === 'income' && styles.segmentBtnActiveIncome,
-                ]}
-                activeOpacity={0.8}
-                onPress={() => handleTypeChange('income')}
-              >
-                <AppIcon
-                  name="ArrowDownLeft"
-                  size={16}
-                  color={
-                    type === 'income'
-                      ? '#FFFFFF'
-                      : (isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B')
-                  }
-                />
-                <Text
-                  style={[
-                    styles.segmentText,
-                    type === 'income' && styles.segmentTextActive,
-                  ]}
-                >
-                  Income
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Amount Input */}
-            <View style={styles.amountContainer}>
-              <Text style={styles.currencySymbol}>₹</Text>
-              <TextInput
-                style={styles.amountInput}
-                placeholder="0"
-                placeholderTextColor={themeColors.textMuted}
-                keyboardType="numeric"
-                keyboardAppearance={isDark ? 'dark' : 'light'}
-                value={amount}
-                onChangeText={setAmount}
-                autoFocus={!initialData}
-              />
-            </View>
-
-            {/* Title / Merchant */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>
-                {type === 'expense' ? 'Merchant / Description' : 'Source / Description'}
-              </Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder={type === 'expense' ? 'e.g. Starbucks, Uber, Grocery' : 'e.g. Salary, Client Payout'}
-                placeholderTextColor={themeColors.textMuted}
-                keyboardAppearance={isDark ? 'dark' : 'light'}
-                value={merchant}
-                onChangeText={setMerchant}
-              />
-            </View>
-
-            {/* Category Pills */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Category</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.categoryPillsScroll}
-              >
-                {availableCategories.map((cat) => {
-                  const isSelected = category === cat;
-                  const catConfig = getCategoryIconConfig(cat, isDark);
-
-                  return (
-                    <TouchableOpacity
-                      key={cat}
-                      style={[
-                        styles.categoryPill,
-                        isSelected && styles.categoryPillSelected,
-                      ]}
-                      activeOpacity={0.8}
-                      onPress={() => setCategory(cat)}
-                    >
-                      <View
+            {/* 1. Transaction Type Selector Tabs */}
+            {!isEditing && (
+              <View style={styles.typeTabsContainer}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeTabsScroll}>
+                  {[
+                    { key: TransactionType.EXPENSE, label: 'Expense', icon: 'ArrowDown' },
+                    { key: TransactionType.INCOME, label: 'Income', icon: 'ArrowUp' },
+                    { key: TransactionType.TRANSFER, label: 'Transfer', icon: 'ArrowRight' },
+                    { key: TransactionType.REFUND, label: 'Refund', icon: 'ArrowDownLeft' },
+                    { key: TransactionType.ADJUSTMENT, label: 'Adjustment', icon: 'SlidersHorizontal' },
+                  ].map((tab) => {
+                    const isSelected = type === tab.key;
+                    return (
+                      <TouchableOpacity
+                        key={tab.key}
                         style={[
-                          styles.catIconCircle,
-                          { backgroundColor: catConfig.backgroundColor },
+                          styles.typeTab,
+                          isSelected && styles.typeTabActive,
+                          isSelected && tab.key === TransactionType.EXPENSE && styles.typeTabExpense,
+                          isSelected && tab.key === TransactionType.INCOME && styles.typeTabIncome,
+                          isSelected && tab.key === TransactionType.TRANSFER && styles.typeTabTransfer,
+                          isSelected && tab.key === TransactionType.REFUND && styles.typeTabRefund,
+                          isSelected && tab.key === TransactionType.ADJUSTMENT && styles.typeTabAdjustment,
                         ]}
+                        onPress={() => handleTypeSelect(tab.key)}
+                        activeOpacity={0.8}
                       >
                         <AppIcon
-                          name={catConfig.iconName}
-                          size={13}
-                          color={catConfig.iconColor}
+                          name={tab.icon as any}
+                          size={14}
+                          color={isSelected ? '#FFFFFF' : isDark ? '#A1A1AA' : '#64748B'}
                         />
-                      </View>
-                      <Text
-                        style={[
-                          styles.categoryPillText,
-                          isSelected && styles.categoryPillTextSelected,
-                        ]}
-                      >
-                        {cat}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
+                        <Text
+                          style={[
+                            styles.typeTabText,
+                            isSelected && styles.typeTabTextActive,
+                          ]}
+                        >
+                          {tab.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
 
-            {/* Payment Method */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Payment Method</Text>
-              <View style={styles.methodRow}>
-                {PAYMENT_METHODS.map((method) => {
-                  const isSelected = paymentMethod === method;
-                  return (
-                    <TouchableOpacity
-                      key={method}
-                      style={[
-                        styles.methodChip,
-                        isSelected && styles.methodChipSelected,
-                      ]}
-                      activeOpacity={0.8}
-                      onPress={() => setPaymentMethod(method)}
-                    >
-                      <Text
-                        style={[
-                          styles.methodText,
-                          isSelected && styles.methodTextSelected,
-                        ]}
-                      >
-                        {method}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+            {/* 2. Amount-First Fast Entry */}
+            <View style={styles.amountContainer}>
+              <Text style={styles.amountLabel}>AMOUNT</Text>
+              <View style={styles.amountInputRow}>
+                <Text style={styles.currencySymbol}>₹</Text>
+                <TextInput
+                  style={styles.amountInput}
+                  placeholder="0.00"
+                  placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                  keyboardType="numeric"
+                  value={amount}
+                  onChangeText={setAmount}
+                  autoFocus={!isEditing}
+                />
               </View>
             </View>
 
-            {/* Notes */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Notes (Optional)</Text>
-              <TextInput
-                style={[styles.textInput, styles.notesInput]}
-                placeholder="Add receipt note or tag..."
-                placeholderTextColor={themeColors.textMuted}
-                keyboardAppearance={isDark ? 'dark' : 'light'}
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-              />
-            </View>
+            {/* 3. Type-Specific Form Sections */}
 
-            {/* Action Buttons */}
-            <View style={styles.actionsRow}>
-              {initialData && onDelete && (
+            {/* ======================================================== */}
+            {/* 1. EXPENSE FORM                                          */}
+            {/* ======================================================== */}
+            {type === TransactionType.EXPENSE && (
+              <>
+                {/* Category (Required) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Category</Text>
+                  <View style={styles.categoryPillsWrap}>
+                    {availableCategories.map((cat) => {
+                      const isSelected = category === cat.name;
+                      const iconCfg = getCategoryIconConfig(cat.name, isDark);
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[styles.categoryChip, isSelected && styles.categoryChipActive]}
+                          onPress={() => {
+                            setCategory(cat.name);
+                            setCategoryId(cat.id.startsWith('default-') ? undefined : cat.id);
+                          }}
+                        >
+                          <AppIcon
+                            name={iconCfg.iconName}
+                            size={13}
+                            color={isSelected ? '#FFFFFF' : iconCfg.iconColor}
+                          />
+                          <Text style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}>
+                            {cat.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <TouchableOpacity
+                      style={styles.createCatBtn}
+                      onPress={() => setIsCreatingCategory(true)}
+                    >
+                      <AppIcon name="Plus" size={13} color={colors.bluePrimary} />
+                      <Text style={styles.createCatBtnText}>New Category</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Paid From (User Accounts) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Paid From</Text>
+                  <View style={styles.pillSelectorRow}>
+                    {accounts.map((acc) => (
+                      <TouchableOpacity
+                        key={acc.id}
+                        style={[styles.accountPill, accountId === acc.id && styles.accountPillActive]}
+                        onPress={() => setAccountId(acc.id)}
+                      >
+                        <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                        <Text style={[styles.accountPillText, accountId === acc.id && styles.accountPillTextActive]}>
+                          {acc.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={styles.addAccountBtn}
+                      onPress={() => handleOpenAddAccount('source')}
+                    >
+                      <AppIcon name="Plus" size={13} color={colors.bluePrimary} />
+                      <Text style={styles.addAccountBtnText}>Add Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Payment Method (How payment happened) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Payment Method</Text>
+                  <View style={styles.pillSelectorRow}>
+                    {PAYMENT_METHOD_OPTIONS.map((method) => {
+                      const isSelected = paymentMethod === method.key;
+                      return (
+                        <TouchableOpacity
+                          key={method.key}
+                          style={[styles.smallPill, isSelected && styles.smallPillActive]}
+                          onPress={() => setPaymentMethod(method.key)}
+                        >
+                          <Text style={[styles.smallPillText, isSelected && styles.smallPillTextActive]}>
+                            {method.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* Payee / Merchant (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Payee / Merchant (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Starbucks, Swiggy, Amazon"
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={merchant}
+                    onChangeText={setMerchant}
+                  />
+                </View>
+
+                {/* Notes (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Note (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.notesInput]}
+                    placeholder="Add contextual note or reference..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={notes}
+                    onChangeText={setNotes}
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </>
+            )}
+
+            {/* ======================================================== */}
+            {/* 2. INCOME FORM (NO Payment Method)                       */}
+            {/* ======================================================== */}
+            {type === TransactionType.INCOME && (
+              <>
+                {/* Category (Required) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Category</Text>
+                  <View style={styles.categoryPillsWrap}>
+                    {availableCategories.map((cat) => {
+                      const isSelected = category === cat.name;
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[styles.categoryChip, isSelected && styles.categoryChipIncomeActive]}
+                          onPress={() => {
+                            setCategory(cat.name);
+                            setCategoryId(cat.id.startsWith('default-') ? undefined : cat.id);
+                          }}
+                        >
+                          <Text style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}>
+                            {cat.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <TouchableOpacity
+                      style={styles.createCatBtn}
+                      onPress={() => setIsCreatingCategory(true)}
+                    >
+                      <AppIcon name="Plus" size={13} color="#16A34A" />
+                      <Text style={[styles.createCatBtnText, { color: '#16A34A' }]}>New Category</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Received Into (User Accounts) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Received Into</Text>
+                  <View style={styles.pillSelectorRow}>
+                    {accounts.map((acc) => (
+                      <TouchableOpacity
+                        key={acc.id}
+                        style={[styles.accountPill, accountId === acc.id && styles.accountPillIncomeActive]}
+                        onPress={() => setAccountId(acc.id)}
+                      >
+                        <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                        <Text style={[styles.accountPillText, accountId === acc.id && styles.accountPillTextActive]}>
+                          {acc.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={styles.addAccountBtn}
+                      onPress={() => handleOpenAddAccount('source')}
+                    >
+                      <AppIcon name="Plus" size={13} color="#16A34A" />
+                      <Text style={[styles.addAccountBtnText, { color: '#16A34A' }]}>Add Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Source / From (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Source / From (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Employer, Client, Investment Return"
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={merchant}
+                    onChangeText={setMerchant}
+                  />
+                </View>
+
+                {/* Note (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Note (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.notesInput]}
+                    placeholder="Add contextual note or reference..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={notes}
+                    onChangeText={setNotes}
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </>
+            )}
+
+            {/* ======================================================== */}
+            {/* 3. TRANSFER FORM (NO Category, NO Payment Method)        */}
+            {/* ======================================================== */}
+            {type === TransactionType.TRANSFER && (
+              <>
+                <View style={styles.transferFlowCard}>
+                  {/* Transfer From */}
+                  <View style={styles.formGroup}>
+                    <Text style={styles.inputLabel}>Transfer From</Text>
+                    <View style={styles.pillSelectorRow}>
+                      {accounts.map((acc) => (
+                        <TouchableOpacity
+                          key={acc.id}
+                          style={[styles.accountPill, accountId === acc.id && styles.accountPillTransferActive]}
+                          onPress={() => setAccountId(acc.id)}
+                        >
+                          <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                          <Text style={[styles.accountPillText, accountId === acc.id && styles.accountPillTextActive]}>
+                            {acc.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity
+                        style={styles.addAccountBtn}
+                        onPress={() => handleOpenAddAccount('source')}
+                      >
+                        <AppIcon name="Plus" size={13} color={colors.navyPrimary} />
+                        <Text style={[styles.addAccountBtnText, { color: colors.navyPrimary }]}>Add Account</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  <View style={styles.transferArrowRow}>
+                    <View style={styles.transferArrowBadge}>
+                      <AppIcon name="ArrowDown" size={16} color={colors.navyPrimary} />
+                    </View>
+                  </View>
+
+                  {/* Transfer To */}
+                  <View style={styles.formGroup}>
+                    <Text style={styles.inputLabel}>Transfer To</Text>
+                    <View style={styles.pillSelectorRow}>
+                      {accounts.map((acc) => {
+                        const isSource = acc.id === accountId;
+                        const isSelected = destinationAccountId === acc.id;
+                        return (
+                          <TouchableOpacity
+                            key={acc.id}
+                            disabled={isSource}
+                            style={[
+                              styles.accountPill,
+                              isSelected && styles.accountPillTransferActive,
+                              isSource && styles.accountPillDisabled,
+                            ]}
+                            onPress={() => setDestinationAccountId(acc.id)}
+                          >
+                            <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                            <Text
+                              style={[
+                                styles.accountPillText,
+                                isSelected && styles.accountPillTextActive,
+                                isSource && styles.accountPillTextDisabled,
+                              ]}
+                            >
+                              {acc.name} {isSource ? '(Source)' : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                      <TouchableOpacity
+                        style={styles.addAccountBtn}
+                        onPress={() => handleOpenAddAccount('destination')}
+                      >
+                        <AppIcon name="Plus" size={13} color={colors.navyPrimary} />
+                        <Text style={[styles.addAccountBtnText, { color: colors.navyPrimary }]}>Add Account</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Note (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Note (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.notesInput]}
+                    placeholder="Add contextual note or reference..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={notes}
+                    onChangeText={setNotes}
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </>
+            )}
+
+            {/* ======================================================== */}
+            {/* 4. REFUND FORM (NO Payment Method)                       */}
+            {/* ======================================================== */}
+            {type === TransactionType.REFUND && (
+              <>
+                {/* Received Into */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Received Into</Text>
+                  <View style={styles.pillSelectorRow}>
+                    {accounts.map((acc) => (
+                      <TouchableOpacity
+                        key={acc.id}
+                        style={[styles.accountPill, accountId === acc.id && styles.accountPillRefundActive]}
+                        onPress={() => setAccountId(acc.id)}
+                      >
+                        <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                        <Text style={[styles.accountPillText, accountId === acc.id && styles.accountPillTextActive]}>
+                          {acc.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={styles.addAccountBtn}
+                      onPress={() => handleOpenAddAccount('source')}
+                    >
+                      <AppIcon name="Plus" size={13} color="#0284C7" />
+                      <Text style={[styles.addAccountBtnText, { color: '#0284C7' }]}>Add Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Original Transaction / Reference (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Original Transaction (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Original transaction ID or reference..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={originalTransactionId}
+                    onChangeText={setOriginalTransactionId}
+                  />
+                </View>
+
+                {/* Original Merchant / Payee (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Source / Merchant (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Amazon Refund, Airline Cancellation"
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={merchant}
+                    onChangeText={setMerchant}
+                  />
+                </View>
+
+                {/* Note (Optional) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Note (Optional)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.notesInput]}
+                    placeholder="Add contextual note or reference..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={notes}
+                    onChangeText={setNotes}
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </>
+            )}
+
+            {/* ======================================================== */}
+            {/* 5. ADJUSTMENT FORM (NO Category, NO Payment Method)      */}
+            {/* ======================================================== */}
+            {type === TransactionType.ADJUSTMENT && (
+              <>
+                {/* Account */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Account</Text>
+                  <View style={styles.pillSelectorRow}>
+                    {accounts.map((acc) => (
+                      <TouchableOpacity
+                        key={acc.id}
+                        style={[styles.accountPill, accountId === acc.id && styles.accountPillAdjustmentActive]}
+                        onPress={() => setAccountId(acc.id)}
+                      >
+                        <Text style={styles.accountEmoji}>{getAccountEmoji(acc.type)}</Text>
+                        <Text style={[styles.accountPillText, accountId === acc.id && styles.accountPillTextActive]}>
+                          {acc.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={styles.addAccountBtn}
+                      onPress={() => handleOpenAddAccount('source')}
+                    >
+                      <AppIcon name="Plus" size={13} color="#D97706" />
+                      <Text style={[styles.addAccountBtnText, { color: '#D97706' }]}>Add Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Direction */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Direction</Text>
+                  <View style={styles.directionRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.directionBtn,
+                        adjustmentDirection === AdjustmentDirection.INCREASE && styles.directionIncreaseActive,
+                      ]}
+                      onPress={() => setAdjustmentDirection(AdjustmentDirection.INCREASE)}
+                    >
+                      <AppIcon
+                        name="Plus"
+                        size={16}
+                        color={adjustmentDirection === AdjustmentDirection.INCREASE ? '#FFFFFF' : '#16A34A'}
+                      />
+                      <Text
+                        style={[
+                          styles.directionBtnText,
+                          adjustmentDirection === AdjustmentDirection.INCREASE && styles.directionBtnTextActive,
+                        ]}
+                      >
+                        Increase (+)
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.directionBtn,
+                        adjustmentDirection === AdjustmentDirection.DECREASE && styles.directionDecreaseActive,
+                      ]}
+                      onPress={() => setAdjustmentDirection(AdjustmentDirection.DECREASE)}
+                    >
+                      <AppIcon
+                        name="Minus"
+                        size={16}
+                        color={adjustmentDirection === AdjustmentDirection.DECREASE ? '#FFFFFF' : '#DC2626'}
+                      />
+                      <Text
+                        style={[
+                          styles.directionBtnText,
+                          adjustmentDirection === AdjustmentDirection.DECREASE && styles.directionBtnTextActive,
+                        ]}
+                      >
+                        Decrease (-)
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Reason (Required for Adjustment!) */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Reason (Required)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.notesInput]}
+                    placeholder="e.g. Cash count reconciliation, bank fee correction..."
+                    placeholderTextColor={isDark ? '#52525B' : '#94A3B8'}
+                    value={reason}
+                    onChangeText={setReason}
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              </>
+            )}
+
+            {/* Inline New Category Creator */}
+            {isCreatingCategory && (
+              <View style={styles.inlineCreateCatBox}>
+                <Text style={styles.inlineCreateCatTitle}>+ New Custom Category</Text>
+                <View style={styles.inlineCreateCatRow}>
+                  <TextInput
+                    style={styles.inlineCatInput}
+                    placeholder="Category name..."
+                    placeholderTextColor={isDark ? '#71717A' : '#94A3B8'}
+                    value={newCategoryName}
+                    onChangeText={setNewCategoryName}
+                    autoFocus
+                  />
+                  <TouchableOpacity
+                    style={styles.inlineCatSaveBtn}
+                    onPress={handleCreateCategory}
+                    disabled={creatingCategoryLoading}
+                  >
+                    {creatingCategoryLoading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.inlineCatSaveBtnText}>Add</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.inlineCatCancelBtn}
+                    onPress={() => {
+                      setIsCreatingCategory(false);
+                      setNewCategoryName('');
+                    }}
+                  >
+                    <AppIcon name="X" size={16} color={isDark ? '#A1A1AA' : '#64748B'} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Inline Add Account Creator */}
+            {isAddingAccount && (
+              <View style={styles.inlineAddAccountBox}>
+                <View style={styles.inlineAddAccountHeader}>
+                  <Text style={styles.inlineAddAccountTitle}>
+                    + Add New Account ({addAccountTarget === 'destination' ? 'Transfer To' : 'Account'})
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setIsAddingAccount(false)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <AppIcon name="X" size={16} color={isDark ? '#A1A1AA' : '#64748B'} />
+                  </TouchableOpacity>
+                </View>
+
+                <TextInput
+                  style={styles.inlineAccInput}
+                  placeholder="Account name (e.g. HDFC Savings, Paytm Wallet)"
+                  placeholderTextColor={isDark ? '#71717A' : '#94A3B8'}
+                  value={newAccountName}
+                  onChangeText={setNewAccountName}
+                  autoFocus
+                />
+
+                <View style={styles.accountTypeRow}>
+                  {[
+                    { type: AccountType.BANK, label: 'Bank', emoji: '🏦' },
+                    { type: AccountType.CASH, label: 'Cash', emoji: '💵' },
+                    { type: AccountType.WALLET, label: 'Wallet', emoji: '👛' },
+                    { type: AccountType.CREDIT_CARD, label: 'Card', emoji: '💳' },
+                  ].map((t) => (
+                    <TouchableOpacity
+                      key={t.type}
+                      style={[
+                        styles.accTypePill,
+                        newAccountType === t.type && styles.accTypePillActive,
+                      ]}
+                      onPress={() => setNewAccountType(t.type)}
+                    >
+                      <Text style={styles.accTypeEmoji}>{t.emoji}</Text>
+                      <Text
+                        style={[
+                          styles.accTypeLabel,
+                          newAccountType === t.type && styles.accTypeLabelActive,
+                        ]}
+                      >
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <TextInput
+                  style={styles.inlineAccInput}
+                  placeholder="Initial balance (optional, ₹)"
+                  placeholderTextColor={isDark ? '#71717A' : '#94A3B8'}
+                  keyboardType="numeric"
+                  value={newAccountBalance}
+                  onChangeText={setNewAccountBalance}
+                />
+
                 <TouchableOpacity
-                  style={styles.deleteBtn}
-                  activeOpacity={0.8}
-                  onPress={handleDelete}
-                  disabled={submitting}
+                  style={styles.inlineAccSaveBtn}
+                  onPress={handleCreateAccount}
+                  disabled={addingAccountLoading}
                 >
-                  <AppIcon name="Trash2" size={18} color="#DC2626" />
+                  {addingAccountLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.inlineAccSaveBtnText}>Create Account</Text>
+                  )}
                 </TouchableOpacity>
-              )}
+              </View>
+            )}
 
-              <TouchableOpacity
-                style={[
-                  styles.saveBtn,
-                  type === 'income' ? styles.saveBtnIncome : styles.saveBtnExpense,
-                  submitting && { opacity: 0.7 },
-                ]}
-                activeOpacity={0.85}
-                onPress={handleSave}
-                disabled={submitting}
-              >
-                <Text style={styles.saveBtnText}>
-                  {submitting ? 'Saving...' : initialData ? 'Update Transaction' : 'Save Transaction'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <View style={{ height: 24 }} />
           </ScrollView>
+
+          {/* Action Footer */}
+          <View style={styles.sheetFooter}>
+            {isEditing && onDelete && (
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={handleDelete}
+                activeOpacity={0.8}
+              >
+                <AppIcon name="Trash2" size={18} color="#EF4444" />
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.saveBtn,
+                submitting && styles.saveBtnDisabled,
+                type === TransactionType.INCOME && styles.saveBtnIncome,
+                type === TransactionType.TRANSFER && styles.saveBtnTransfer,
+                type === TransactionType.REFUND && styles.saveBtnRefund,
+                type === TransactionType.ADJUSTMENT && styles.saveBtnAdjustment,
+              ]}
+              onPress={handleSave}
+              disabled={submitting}
+              activeOpacity={0.85}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.saveBtnText}>
+                  {isEditing ? 'Save Changes' : `Save ${type}`}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
   );
 };
 
-const makeStyles = (c: Palette, isDark: boolean) =>
+const createStyles = (themeColors: typeof colors, isDark: boolean) =>
   StyleSheet.create({
     overlay: {
       flex: 1,
       justifyContent: 'flex-end',
-      backgroundColor: c.modalBackdrop,
+      backgroundColor: 'rgba(0, 0, 0, 0.55)',
     },
     backdrop: {
       flex: 1,
     },
     sheetContainer: {
-      backgroundColor: c.surface,
-      borderTopLeftRadius: 28,
-      borderTopRightRadius: 28,
-      maxHeight: '90%',
-      paddingBottom: Platform.OS === 'ios' ? 36 : 24,
-      borderWidth: isDark ? 1 : 0,
-      borderColor: isDark ? c.border : 'transparent',
+      backgroundColor: isDark ? '#121214' : '#FFFFFF',
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      maxHeight: '88%',
+      paddingBottom: Platform.OS === 'ios' ? 24 : 16,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
     },
-    handle: {
-      width: 40,
-      height: 4.5,
-      borderRadius: 2.5,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1',
+    handleBar: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: isDark ? '#3F3F46' : '#CBD5E1',
       alignSelf: 'center',
       marginTop: 10,
       marginBottom: 6,
     },
-    header: {
+    sheetHeader: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 22,
+      paddingHorizontal: 20,
       paddingVertical: 12,
       borderBottomWidth: 1,
-      borderBottomColor: isDark ? c.border : '#F1F5F9',
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#F1F5F9',
     },
-    headerTitle: {
+    sheetTitle: {
       fontSize: 18,
-      fontWeight: '700',
-      color: c.textPrimary,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      letterSpacing: -0.3,
     },
     closeBtn: {
       padding: 4,
     },
-    scrollBody: {
-      paddingHorizontal: 22,
-      paddingTop: 16,
-      paddingBottom: 24,
+    bodyScroll: {
+      paddingHorizontal: 20,
+      paddingTop: 14,
     },
-    segmentedControl: {
+    typeTabsContainer: {
+      marginBottom: 16,
+    },
+    typeTabsScroll: {
       flexDirection: 'row',
-      backgroundColor: isDark ? '#000000' : '#F1F5F9',
-      borderRadius: 14,
-      padding: 4,
-      marginBottom: 20,
-      borderWidth: isDark ? 1 : 0,
-      borderColor: isDark ? c.border : 'transparent',
+      gap: 8,
     },
-    segmentBtn: {
-      flex: 1,
+    typeTab: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 10,
-      borderRadius: 11,
       gap: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 14,
+      backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9',
     },
-    segmentBtnActiveExpense: {
-      backgroundColor: isDark ? c.accent : '#031D44',
+    typeTabActive: {
+      backgroundColor: colors.bluePrimary,
     },
-    segmentBtnActiveIncome: {
-      backgroundColor: '#10B981',
+    typeTabExpense: {
+      backgroundColor: colors.bluePrimary,
     },
-    segmentText: {
-      fontSize: 14,
+    typeTabIncome: {
+      backgroundColor: '#16A34A',
+    },
+    typeTabTransfer: {
+      backgroundColor: colors.navyPrimary,
+    },
+    typeTabRefund: {
+      backgroundColor: '#0284C7',
+    },
+    typeTabAdjustment: {
+      backgroundColor: '#D97706',
+    },
+    typeTabText: {
+      fontSize: 12.5,
       fontWeight: '600',
-      color: isDark ? c.textMuted : '#64748B',
+      color: isDark ? '#A1A1AA' : '#64748B',
     },
-    segmentTextActive: {
-      color: isDark ? c.onAccent : '#FFFFFF',
+    typeTabTextActive: {
+      color: '#FFFFFF',
       fontWeight: '700',
     },
     amountContainer: {
+      backgroundColor: isDark ? '#1C1C1E' : '#F8FAFC',
+      borderRadius: 18,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
+    },
+    amountLabel: {
+      fontSize: 10.5,
+      fontWeight: '700',
+      color: isDark ? '#A1A1AA' : '#64748B',
+      letterSpacing: 1.1,
+      marginBottom: 6,
+    },
+    amountInputRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 12,
-      marginBottom: 18,
     },
     currencySymbol: {
-      fontSize: 34,
-      fontWeight: '700',
-      color: c.textPrimary,
+      fontSize: 32,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : '#0F172A',
       marginRight: 6,
     },
     amountInput: {
-      fontSize: 42,
-      fontWeight: '800',
-      color: c.textPrimary,
-      minWidth: 120,
-      textAlign: 'center',
+      flex: 1,
+      fontSize: 34,
+      fontWeight: '900',
+      color: isDark ? '#FFFFFF' : '#0F172A',
       padding: 0,
     },
-    inputGroup: {
+    formGroup: {
       marginBottom: 16,
     },
     inputLabel: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: c.textSecondary,
-      marginBottom: 6,
-      letterSpacing: 0.2,
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: isDark ? '#E4E4E7' : '#1E293B',
+      marginBottom: 8,
     },
     textInput: {
-      backgroundColor: c.surface,
+      backgroundColor: isDark ? '#1C1C1E' : '#F8FAFC',
       borderWidth: 1,
-      borderColor: isDark ? c.border : '#E2E8F0',
-      borderRadius: 12,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : '#E2E8F0',
+      borderRadius: 14,
       paddingHorizontal: 14,
       paddingVertical: 12,
       fontSize: 14,
-      color: c.textPrimary,
+      color: isDark ? '#FFFFFF' : '#0F172A',
     },
     notesInput: {
-      height: 64,
+      minHeight: 56,
       textAlignVertical: 'top',
     },
-    categoryPillsScroll: {
+    pillSelectorRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 8,
-      paddingVertical: 4,
+      alignItems: 'center',
     },
-    categoryPill: {
+    accountPill: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: isDark ? c.border : '#E2E8F0',
+      gap: 6,
       paddingHorizontal: 12,
       paddingVertical: 8,
-      borderRadius: 20,
-      gap: 6,
+      borderRadius: 12,
+      backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
     },
-    categoryPillSelected: {
-      backgroundColor: isDark ? 'rgba(245, 138, 7, 0.15)' : '#FFF3E8',
-      borderColor: c.accent,
+    accountEmoji: {
+      fontSize: 14,
     },
-    catIconCircle: {
-      width: 22,
-      height: 22,
-      borderRadius: 11,
+    accountPillActive: {
+      backgroundColor: colors.bluePrimary,
+      borderColor: colors.bluePrimary,
+    },
+    accountPillIncomeActive: {
+      backgroundColor: '#16A34A',
+      borderColor: '#16A34A',
+    },
+    accountPillTransferActive: {
+      backgroundColor: colors.navyPrimary,
+      borderColor: colors.navyPrimary,
+    },
+    accountPillRefundActive: {
+      backgroundColor: '#0284C7',
+      borderColor: '#0284C7',
+    },
+    accountPillAdjustmentActive: {
+      backgroundColor: '#D97706',
+      borderColor: '#D97706',
+    },
+    accountPillDisabled: {
+      opacity: 0.4,
+    },
+    accountPillText: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      color: isDark ? '#E4E4E7' : '#334155',
+    },
+    accountPillTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+    },
+    accountPillTextDisabled: {
+      color: isDark ? '#71717A' : '#94A3B8',
+    },
+    addAccountBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 11,
+      paddingVertical: 8,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: isDark ? '#52525B' : '#94A3B8',
+    },
+    addAccountBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.bluePrimary,
+    },
+    categoryPillsWrap: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 7,
+    },
+    categoryChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 11,
+      paddingVertical: 7,
+      borderRadius: 12,
+      backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
+    },
+    categoryChipActive: {
+      backgroundColor: colors.bluePrimary,
+      borderColor: colors.bluePrimary,
+    },
+    categoryChipIncomeActive: {
+      backgroundColor: '#16A34A',
+      borderColor: '#16A34A',
+    },
+    categoryChipText: {
+      fontSize: 11.5,
+      fontWeight: '600',
+      color: isDark ? '#D4D4D8' : '#334155',
+    },
+    categoryChipTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+    },
+    createCatBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: colors.bluePrimary,
+    },
+    createCatBtnText: {
+      fontSize: 11.5,
+      fontWeight: '700',
+      color: colors.bluePrimary,
+    },
+    smallPill: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 10,
+      backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9',
+    },
+    smallPillActive: {
+      backgroundColor: colors.bluePrimary,
+    },
+    smallPillText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: isDark ? '#A1A1AA' : '#64748B',
+    },
+    smallPillTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+    },
+    transferFlowCard: {
+      backgroundColor: isDark ? '#1C1C1E' : '#F8FAFC',
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
+    },
+    transferArrowRow: {
+      alignItems: 'center',
+      marginVertical: 4,
+    },
+    transferArrowBadge: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: isDark ? '#27272A' : '#E2E8F0',
       alignItems: 'center',
       justifyContent: 'center',
     },
-    categoryPillText: {
-      fontSize: 12.5,
-      fontWeight: '600',
-      color: isDark ? c.textSecondary : '#475569',
-    },
-    categoryPillTextSelected: {
-      color: isDark ? c.accent : '#031D44',
-      fontWeight: '700',
-    },
-    methodRow: {
+    directionRow: {
       flexDirection: 'row',
+      gap: 10,
+    },
+    directionBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : '#E2E8F0',
+      backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
+    },
+    directionIncreaseActive: {
+      backgroundColor: '#16A34A',
+      borderColor: '#16A34A',
+    },
+    directionDecreaseActive: {
+      backgroundColor: '#DC2626',
+      borderColor: '#DC2626',
+    },
+    directionBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+    },
+    directionBtnTextActive: {
+      color: '#FFFFFF',
+    },
+    inlineCreateCatBox: {
+      backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9',
+      borderRadius: 14,
+      padding: 12,
+      marginTop: 8,
+    },
+    inlineCreateCatTitle: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: isDark ? '#D4D4D8' : '#334155',
+      marginBottom: 6,
+    },
+    inlineCreateCatRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
       gap: 8,
     },
-    methodChip: {
+    inlineCatInput: {
       flex: 1,
-      paddingVertical: 10,
-      alignItems: 'center',
-      backgroundColor: c.surface,
+      height: 38,
+      backgroundColor: isDark ? '#27272A' : '#FFFFFF',
       borderRadius: 10,
-      borderWidth: 1,
-      borderColor: isDark ? c.border : '#E2E8F0',
-    },
-    methodChipSelected: {
-      backgroundColor: isDark ? c.accent : '#031D44',
-      borderColor: isDark ? c.accent : '#031D44',
-    },
-    methodText: {
+      paddingHorizontal: 10,
       fontSize: 13,
-      fontWeight: '600',
-      color: isDark ? c.textSecondary : '#475569',
+      color: isDark ? '#FFFFFF' : '#0F172A',
     },
-    methodTextSelected: {
-      color: isDark ? c.onAccent : '#FFFFFF',
+    inlineCatSaveBtn: {
+      backgroundColor: colors.bluePrimary,
+      paddingHorizontal: 14,
+      height: 38,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    inlineCatSaveBtnText: {
+      color: '#FFFFFF',
       fontWeight: '700',
+      fontSize: 12.5,
     },
-    actionsRow: {
+    inlineCatCancelBtn: {
+      padding: 6,
+    },
+    // Inline Add Account Box
+    inlineAddAccountBox: {
+      backgroundColor: isDark ? '#18181B' : '#F1F5F9',
+      borderRadius: 16,
+      padding: 14,
+      marginTop: 10,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : '#CBD5E1',
+      gap: 10,
+    },
+    inlineAddAccountHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 12,
-      marginTop: 10,
+      justifyContent: 'space-between',
+    },
+    inlineAddAccountTitle: {
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+    },
+    inlineAccInput: {
+      backgroundColor: isDark ? '#27272A' : '#FFFFFF',
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      fontSize: 13,
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
+    },
+    accountTypeRow: {
+      flexDirection: 'row',
+      gap: 6,
+    },
+    accTypePill: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      paddingVertical: 7,
+      borderRadius: 10,
+      backgroundColor: isDark ? '#27272A' : '#FFFFFF',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0',
+    },
+    accTypePillActive: {
+      backgroundColor: colors.bluePrimary,
+      borderColor: colors.bluePrimary,
+    },
+    accTypeEmoji: {
+      fontSize: 12,
+    },
+    accTypeLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: isDark ? '#A1A1AA' : '#64748B',
+    },
+    accTypeLabelActive: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+    },
+    inlineAccSaveBtn: {
+      backgroundColor: colors.bluePrimary,
+      paddingVertical: 10,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    inlineAccSaveBtnText: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+      fontSize: 13,
+    },
+    sheetFooter: {
+      flexDirection: 'row',
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      gap: 10,
+      borderTopWidth: 1,
+      borderTopColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#F1F5F9',
     },
     deleteBtn: {
       width: 48,
@@ -620,36 +1716,34 @@ const makeStyles = (c: Palette, isDark: boolean) =>
       backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: isDark ? 1 : 0,
-      borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : 'transparent',
     },
     saveBtn: {
       flex: 1,
-      paddingVertical: 14,
+      height: 48,
       borderRadius: 14,
+      backgroundColor: colors.bluePrimary,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    saveBtnExpense: {
-      backgroundColor: c.accent,
-      shadowColor: c.accent,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: isDark ? 0.15 : 0.35,
-      shadowRadius: 8,
-      elevation: 4,
-    },
     saveBtnIncome: {
-      backgroundColor: '#10B981',
-      shadowColor: '#10B981',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: isDark ? 0.15 : 0.35,
-      shadowRadius: 8,
-      elevation: 4,
+      backgroundColor: '#16A34A',
+    },
+    saveBtnTransfer: {
+      backgroundColor: colors.navyPrimary,
+    },
+    saveBtnRefund: {
+      backgroundColor: '#0284C7',
+    },
+    saveBtnAdjustment: {
+      backgroundColor: '#D97706',
+    },
+    saveBtnDisabled: {
+      opacity: 0.6,
     },
     saveBtnText: {
+      color: '#FFFFFF',
       fontSize: 15,
-      fontWeight: '700',
-      color: isDark ? c.onAccent : '#FFFFFF',
-      letterSpacing: 0.2,
+      fontWeight: '800',
+      letterSpacing: -0.2,
     },
   });

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,102 +16,15 @@ import { useThemedStyles } from '../theme/useThemedStyles';
 import { useTheme } from '../context/ThemeContext';
 import { AppIcon, AppIconName } from '../components/icons/AppIcon';
 import { toast } from '../context/ToastContext';
+import { NotificationItem } from '../services/notificationService';
 
 declare const process: {
   env: Record<string, string | undefined>;
 };
 
-export interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  timestamp: string;
-  dateGroup: 'Today, Nov 14' | 'Yesterday, Nov 13' | 'Earlier this week';
-  read: boolean;
-  iconName: AppIconName;
-  iconColor: string;
-  iconBg: string;
-}
+export type { NotificationItem };
 
-export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: 'notif-1',
-    title: 'Special offer: 2x Cashback on weekend dining',
-    message: 'Check out the latest deals on our partner restaurants. Pay via UPI to get 10% extra.',
-    timestamp: '9:25 am',
-    dateGroup: 'Today, Nov 14',
-    read: false,
-    iconName: 'Gift',
-    iconColor: '#EA580C',
-    iconBg: '#FFEDD5',
-  },
-  {
-    id: 'notif-2',
-    title: 'Salary Credited: ₹85,000 received',
-    message: 'Monthly payroll payout credited from TechCorp Solutions to your primary account.',
-    timestamp: '8:00 am',
-    dateGroup: 'Today, Nov 14',
-    read: false,
-    iconName: 'ArrowDown',
-    iconColor: '#16A34A',
-    iconBg: '#DCFCE7',
-  },
-  {
-    id: 'notif-3',
-    title: 'Budget Alert: 85% of Food & Dining budget used',
-    message: 'You have spent ₹14,200 of your ₹18,000 monthly food allowance. 16 days remaining.',
-    timestamp: '6:30 pm',
-    dateGroup: 'Yesterday, Nov 13',
-    read: true,
-    iconName: 'CircleAlert',
-    iconColor: '#D97706',
-    iconBg: '#FEF3C7',
-  },
-  {
-    id: 'notif-4',
-    title: 'Settlement: Jai Sharma paid ₹450',
-    message: 'Goa Trip Beach Shack Dinner split has been settled via UPI.',
-    timestamp: '11:15 am',
-    dateGroup: 'Yesterday, Nov 13',
-    read: true,
-    iconName: 'Users',
-    iconColor: '#0284C7',
-    iconBg: '#E0F2FE',
-  },
-  {
-    id: 'notif-5',
-    title: 'Your subscription to Spotify Premium is now active',
-    message: 'Next billing cycle on December 14 for ₹119.',
-    timestamp: '9:00 pm',
-    dateGroup: 'Earlier this week',
-    read: true,
-    iconName: 'Calendar',
-    iconColor: '#9333EA',
-    iconBg: '#F3E8FF',
-  },
-  {
-    id: 'notif-6',
-    title: 'Reminder: Pay your electricity bill to avoid late fees',
-    message: 'Bill amount of ₹2,450 is due on November 18.',
-    timestamp: '12:17 pm',
-    dateGroup: 'Earlier this week',
-    read: true,
-    iconName: 'Zap',
-    iconColor: '#E11D48',
-    iconBg: '#FFE4E6',
-  },
-  {
-    id: 'notif-7',
-    title: 'Security: Biometric unlock enabled',
-    message: 'Biometric face & fingerprint authentication was verified on this device.',
-    timestamp: '10:30 am',
-    dateGroup: 'Earlier this week',
-    read: true,
-    iconName: 'Shield',
-    iconColor: '#084887',
-    iconBg: '#E0F2FE',
-  },
-];
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = [];
 
 interface NotificationsModalProps {
   visible: boolean;
@@ -156,8 +69,25 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
     return animMap[id];
   };
 
-  // Group notifications by dateGroup
-  const groups = ['Today, Nov 14', 'Yesterday, Nov 13', 'Earlier this week'] as const;
+  // Group notifications dynamically by dateGroup
+  const groups = useMemo(() => {
+    const set = new Set<string>();
+    notifications.forEach((n) => {
+      if (n.dateGroup) {
+        set.add(n.dateGroup);
+      }
+    });
+    return Array.from(set).sort((a, b) => {
+      const score = (g: string) => {
+        if (g.startsWith('Today')) return 0;
+        if (g.startsWith('Yesterday')) return 1;
+        if (g.startsWith('Earlier')) return 2;
+        if (g.startsWith('Older')) return 3;
+        return 4;
+      };
+      return score(a) - score(b);
+    });
+  }, [notifications]);
 
   const handleToggleDelete = (id: string) => {
     setActiveDeleteId((prev) => (prev === id ? null : id));

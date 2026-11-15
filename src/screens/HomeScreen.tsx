@@ -11,14 +11,12 @@ import {
   NativeScrollEvent,
   Animated,
   useWindowDimensions,
-  PanResponder,
-  Image,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import Svg, { G, Circle } from 'react-native-svg';
 import { AppIcon } from '../components/icons/AppIcon';
 import { getCategoryIconConfig } from '../components/icons/categoryIcons';
-import { ExpenseItem } from '../data/mockData';
 import { colors } from '../theme/colors';
 import { toast } from '../context/ToastContext';
 import { AuthContext } from '../context/AuthContext';
@@ -27,17 +25,23 @@ import { Logo } from '../components/common/Logo';
 import {
   NotificationsModal,
   NotificationItem,
-  INITIAL_NOTIFICATIONS,
 } from './NotificationsModal';
+import { notificationService } from '../services/notificationService';
+import { HomeDashboardData, Transaction, TransactionType } from '../api/types';
+import { homeApi } from '../api/home';
+import { analyticsApi } from '../api/analytics';
+import { queryClient } from '../state/queryClient';
+import { formatTransactionTime } from '../utils/date';
 
 interface HomeScreenProps {
   userName?: string | null;
   userAvatarUrl?: string | null;
-  expenses: ExpenseItem[];
+  expenses?: Transaction[];
   onRefresh?: () => Promise<void> | void;
   onScrollingChange?: (isScrolling: boolean) => void;
   onNavigateToTab?: (tab: 'Home' | 'PE Tracker' | 'Groups' | 'Account') => void;
-  onOpenAddTransaction?: (type?: 'expense' | 'income') => void;
+  onOpenAddTransaction?: (type?: TransactionType) => void;
+  onEditTransaction?: (transaction: Transaction) => void;
 }
 
 type HomeViewMode = 'overview' | 'insights';
@@ -49,17 +53,18 @@ const SWITCHER_TAB_WIDTH = (SWITCHER_WIDTH - SWITCHER_PADDING * 2) / 2;
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   userName,
-  userAvatarUrl,
-  expenses,
+  userAvatarUrl: _userAvatarUrl,
+  expenses: _expensesProp,
   onRefresh,
   onScrollingChange,
   onNavigateToTab,
   onOpenAddTransaction,
+  onEditTransaction,
 }) => {
   const authContext = React.useContext(AuthContext);
   const { isDark, colors: themeColors } = useTheme();
   const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
-  const avatarUrl = userAvatarUrl ?? authContext?.user?.avatarUrl ?? null;
+
   const [viewMode, setViewMode] = useState<HomeViewMode>('overview');
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
   const [insightsMonth, setInsightsMonth] = useState('November 2026');
@@ -68,29 +73,45 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<string | null>(null);
   const [insightsCategoryView, setInsightsCategoryView] = useState<'chart' | 'list'>('chart');
   const [goalsModalVisible, setGoalsModalVisible] = useState(false);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
+    notificationService.getNotifications(),
+  );
   const [notificationsModalVisible, setNotificationsModalVisible] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = notificationService.subscribe((updated) => {
+      setNotifications(updated);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Real Server State
+  const [homeData, setHomeData] = useState<HomeDashboardData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Insights data
+  const [analyticsData, setAnalyticsData] = useState<any>(null);
+  const [_isLoadingInsights, setIsLoadingInsights] = useState(false);
 
   const unreadCount = useMemo(() => {
     return notifications.filter((n) => !n.read).length;
   }, [notifications]);
 
   const handleMarkNotificationAsRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-    );
+    notificationService.markAsRead(id);
   }, []);
 
   const handleDeleteNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    notificationService.deleteNotification(id);
   }, []);
 
   const handleMarkAllNotificationsAsRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    notificationService.markAllAsRead();
   }, []);
 
   const handleClearAllNotifications = useCallback(() => {
-    setNotifications([]);
+    notificationService.clearAll();
   }, []);
 
   const { width: windowWidth } = useWindowDimensions();
@@ -122,32 +143,77 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     outputRange: [0, -windowWidth],
   });
 
-
-
   const scrollViewRef = useRef<React.ElementRef<typeof ScrollView>>(null);
   const lastOffsetY = useRef(0);
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showBottomNav = useCallback(() => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
     onScrollingChange?.(false);
   }, [onScrollingChange]);
 
+  // Load Real Home Data
+  const loadHome = useCallback(async (isSilent = false) => {
+    if (!isSilent) setIsLoading(true);
+    setError(null);
+    try {
+      const data = await homeApi.getHomeData();
+      setHomeData(data);
+    } catch (err: any) {
+      setError(err?.message || 'Unable to load financial dashboard.');
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  // Load Real Insights Data
+  const loadInsights = useCallback(async () => {
+    setIsLoadingInsights(true);
+    try {
+      const summary = await analyticsApi.getSummary({ period: timeRange });
+      setAnalyticsData(summary);
+    } catch {
+      // Keep previous
+    } finally {
+      setIsLoadingInsights(false);
+    }
+  }, [timeRange]);
+
+  useEffect(() => {
+    loadHome();
+
+    const unsubscribeHome = queryClient.subscribe(['home'], () => {
+      loadHome(true);
+    });
+    const unsubscribeTx = queryClient.subscribe(['transactions'], () => {
+      loadHome(true);
+      if (viewMode === 'insights') loadInsights();
+    });
+
+    return () => {
+      unsubscribeHome();
+      unsubscribeTx();
+    };
+  }, [loadHome, loadInsights, viewMode]);
+
+  useEffect(() => {
+    if (viewMode === 'insights') {
+      loadInsights();
+    }
+  }, [viewMode, loadInsights]);
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     showBottomNav();
     try {
-      if (onRefresh) {
-        await onRefresh();
-      }
+      if (onRefresh) await onRefresh();
+      await loadHome(true);
+      if (viewMode === 'insights') await loadInsights();
     } finally {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = setTimeout(() => {
-        setRefreshing(false);
-      }, 500);
+      setRefreshing(false);
     }
-  }, [onRefresh, showBottomNav]);
+  }, [onRefresh, loadHome, loadInsights, viewMode, showBottomNav]);
 
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset } = event.nativeEvent;
@@ -183,141 +249,75 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   const displayName = useMemo(() => {
     const raw = userName ?? authContext?.user?.displayName;
-    if (!raw || !raw.trim()) return 'Vansh';
+    if (!raw || !raw.trim()) return 'Friend';
     return raw.trim().split(' ')[0];
   }, [userName, authContext?.user?.displayName]);
 
-  const userInitial = useMemo(() => {
-    return displayName.charAt(0).toUpperCase();
-  }, [displayName]);
+  // Derived Real Financial Values
+  const totalIncome = homeData?.thisMonth?.income ?? 0;
+  const totalExpenses = homeData?.thisMonth?.expenses ?? 0;
+  const netBalance = homeData?.accountSummary?.totalBalance ?? (totalIncome - totalExpenses);
+  const todaySpent = homeData?.today?.spent ?? 0;
 
-  // Aggregate Real Financial Metrics
-  const { totalIncome, totalExpenses, netBalance } = useMemo(() => {
-    let incomeSum = 0;
-    let expenseSum = 0;
+  // Monthly Budget calculations
+  const monthlyBudget = useMemo(() => {
+    return Math.max(50000, Math.ceil((totalExpenses * 1.25) / 1000) * 1000);
+  }, [totalExpenses]);
 
-    expenses.forEach((item) => {
-      if (item.type === 'income') {
-        incomeSum += item.amount;
-      } else {
-        expenseSum += item.amount;
-      }
-    });
-
-    // Provide sensible default base balance matching reference if fresh
-    const baselineIncome = incomeSum > 0 ? incomeSum : 120000;
-    const baselineExpenses = expenseSum > 0 ? expenseSum : 35500;
-    const net = baselineIncome - baselineExpenses; // ₹84,500
-
-    return {
-      totalIncome: baselineIncome,
-      totalExpenses: baselineExpenses,
-      netBalance: net,
-    };
-  }, [expenses]);
-
-  // Monthly Budget Progress (November Budget ₹35,500 of ₹50,000 spent)
-  const monthlyBudget = 50000;
-  const budgetSpentPercent = Math.min(
-    100,
-    Math.round((totalExpenses / monthlyBudget) * 100),
-  );
+  const budgetSpentPercent = monthlyBudget > 0
+    ? Math.min(100, Math.round((totalExpenses / monthlyBudget) * 100))
+    : 0;
   const budgetRemaining = Math.max(0, monthlyBudget - totalExpenses);
 
-  // Top Category Breakdowns
+  const daysRemaining = useMemo(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Math.max(0, lastDay - now.getDate());
+  }, []);
+
+  const currentMonthName = useMemo(() => {
+    return new Intl.DateTimeFormat('en-US', { month: 'long' }).format(new Date());
+  }, []);
+
+  const currentMonthShort = useMemo(() => {
+    return new Intl.DateTimeFormat('en-US', { month: 'short' }).format(new Date());
+  }, []);
+
+  // Top Category Breakdowns from real backend data
   const categorySummary = useMemo(() => {
-    const map = new Map<string, number>();
-
-    expenses.forEach((item) => {
-      if (item.type !== 'income') {
-        const cat = item.category || 'Other';
-        map.set(cat, (map.get(cat) || 0) + item.amount);
-      }
-    });
-
-    if (map.size === 0) {
-      return [
-        { category: 'Food', amount: 14200, percentage: 40, color: colors.bluePrimary },
-        { category: 'Transport', amount: 6800, percentage: 19, color: '#F59E0B' },
-        { category: 'Shopping', amount: 10300, percentage: 29, color: colors.navyPrimary },
-        { category: 'Entertainment', amount: 4200, percentage: 12, color: '#8B5CF6' },
-      ];
+    if (homeData?.topCategories && homeData.topCategories.length > 0) {
+      return homeData.topCategories.map((c) => ({
+        category: c.category,
+        amount: c.amount,
+        percentage: c.percentage,
+        color: c.color,
+      }));
     }
+    return [];
+  }, [homeData?.topCategories]);
 
-    const colorPalette = [colors.bluePrimary, colors.navyPrimary, colors.blueLight, '#F59E0B', '#10B981', '#8B5CF6'];
-    const items = Array.from(map.entries()).map(([category, amount], idx) => ({
-      category,
-      amount,
-      percentage: totalExpenses > 0 ? Math.round((amount / totalExpenses) * 100) : 0,
-      color: colorPalette[idx % colorPalette.length],
-    }));
-
-    return items.sort((a, b) => b.amount - a.amount).slice(0, 5);
-  }, [expenses, totalExpenses]);
-
-  // Recent Activity Transactions
+  // Recent Activity from real backend data
   const recentTransactions = useMemo(() => {
-    if (expenses.length > 0) {
-      return expenses.slice(0, 4);
-    }
+    return (homeData?.recentTransactions ?? []).slice(0, 5);
+  }, [homeData?.recentTransactions]);
 
-    return [
-      {
-        id: 'tx-1',
-        merchant: 'Starbucks Coffee',
-        category: 'Food & Dining',
-        amount: 450,
-        type: 'expense' as const,
-        dateStr: 'Today',
-        timeStr: '4:15 PM',
-        dateGroup: 'Today' as const,
-        paymentMethod: 'UPI',
-      },
-      {
-        id: 'tx-2',
-        merchant: 'Uber Trip',
-        category: 'Transport',
-        amount: 320,
-        type: 'expense' as const,
-        dateStr: 'Today',
-        timeStr: '1:20 PM',
-        dateGroup: 'Today' as const,
-        paymentMethod: 'Card',
-      },
-      {
-        id: 'tx-3',
-        merchant: 'Swiggy Food Delivery',
-        category: 'Food & Dining',
-        amount: 620,
-        type: 'expense' as const,
-        dateStr: 'Yesterday',
-        timeStr: '8:40 PM',
-        dateGroup: 'Yesterday' as const,
-        paymentMethod: 'UPI',
-      },
-      {
-        id: 'tx-4',
-        merchant: 'Monthly Payout / Salary',
-        category: 'Income',
-        amount: 85000,
-        type: 'income' as const,
-        dateStr: 'Nov 01',
-        timeStr: '9:00 AM',
-        dateGroup: 'Earlier' as const,
-        paymentMethod: 'Bank',
-      },
-    ];
-  }, [expenses]);
+  const hasFinancialData =
+    (homeData?.accountSummary?.accountCount ?? 0) > 0 ||
+    totalIncome > 0 ||
+    totalExpenses > 0 ||
+    recentTransactions.length > 0;
 
   // Selected Category Data for Drill-down
   const activeDrilldownCategory = useMemo(() => {
     if (!selectedCategoryDetail) return null;
-    return categorySummary.find((c) => c.category === selectedCategoryDetail) || {
-      category: selectedCategoryDetail,
-      amount: 14200,
-      percentage: 33,
-      color: '#EA580C',
-    };
+    return (
+      categorySummary.find((c) => c.category === selectedCategoryDetail) || {
+        category: selectedCategoryDetail,
+        amount: 0,
+        percentage: 0,
+        color: '#EA580C',
+      }
+    );
   }, [selectedCategoryDetail, categorySummary]);
 
   // Donut SVG Parameters
@@ -358,7 +358,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               onPress={() => onNavigateToTab?.('Account')}
               accessibilityLabel="Artha Logo"
             >
-              <Logo size={36} variant={isDark ? "white" : "navy"} animated={false} />
+              <Logo size={36} variant={isDark ? 'white' : 'navy'} animated={false} />
             </TouchableOpacity>
 
             <View style={styles.greetingBox}>
@@ -450,299 +450,358 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           >
             {/* Page 1: Overview */}
             <View style={[styles.slidingPageItem, { width: windowWidth }]}>
-              {/* B. TOTAL BALANCE CARD WITH YELLOW CIRCLE ACCENT */}
-              <View style={styles.balanceCard}>
-                {/* Reference yellow circular graphic in top-right */}
-                <View style={styles.accentCircleOuter}>
-                  <View style={styles.accentCircleInner} />
+              {isLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={colors.bluePrimary} />
+                  <Text style={styles.loadingText}>Loading your finances...</Text>
                 </View>
-
-                <View style={styles.balanceTopRow}>
-                  <View style={styles.balanceLabelGroup}>
-                    <Text style={styles.balanceLabel}>Total balance</Text>
-                    <TouchableOpacity
-                      style={styles.eyeBtn}
-                      onPress={() => setIsBalanceHidden((prev) => !prev)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityLabel="Toggle Balance Visibility"
-                    >
-                      <AppIcon
-                        name={isBalanceHidden ? 'EyeOff' : 'Eye'}
-                        size={16}
-                        color="rgba(255, 255, 255, 0.85)"
-                      />
-                    </TouchableOpacity>
-                  </View>
+              ) : error ? (
+                <View style={styles.errorContainer}>
+                  <AppIcon name="CircleAlert" size={36} color="#EF4444" />
+                  <Text style={styles.errorTitle}>Unable to load financial data</Text>
+                  <Text style={styles.errorSubtitle}>{error}</Text>
+                  <TouchableOpacity style={styles.retryBtn} onPress={() => loadHome(false)}>
+                    <Text style={styles.retryBtnText}>Retry</Text>
+                  </TouchableOpacity>
                 </View>
-
-                {/* Large Hero Amount */}
-                <Text style={styles.balanceAmount}>
-                  {isBalanceHidden ? '₹••••••••' : `₹${netBalance.toLocaleString('en-IN')}`}
-                </Text>
-
-                {/* Sub-Metric Badges Inside Card */}
-                <View style={styles.subMetricsContainer}>
-                  {/* Income Pill */}
-                  <View style={styles.subMetricPill}>
-                    <View style={styles.subMetricIconCircleIncome}>
-                      <AppIcon name="ArrowDown" size={13} color="#FFFFFF" strokeWidth={2.6} />
+              ) : (
+                <>
+                  {/* B. TOTAL BALANCE CARD WITH YELLOW CIRCLE ACCENT */}
+                  <View style={styles.balanceCard}>
+                    {/* Reference yellow circular graphic in top-right */}
+                    <View style={styles.accentCircleOuter}>
+                      <View style={styles.accentCircleInner} />
                     </View>
-                    <View>
-                      <Text style={styles.subMetricCaption}>Income • Nov</Text>
-                      <Text style={styles.subMetricValue}>
-                        {isBalanceHidden
-                          ? '₹••••'
-                          : `+₹${totalIncome.toLocaleString('en-IN')}`}
-                      </Text>
+
+                    <View style={styles.balanceTopRow}>
+                      <View style={styles.balanceLabelGroup}>
+                        <Text style={styles.balanceLabel}>Total balance</Text>
+                        <TouchableOpacity
+                          style={styles.eyeBtn}
+                          onPress={() => setIsBalanceHidden((prev) => !prev)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityLabel="Toggle Balance Visibility"
+                        >
+                          <AppIcon
+                            name={isBalanceHidden ? 'EyeOff' : 'Eye'}
+                            size={16}
+                            color="rgba(255, 255, 255, 0.85)"
+                          />
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
 
-                  {/* Expenses Pill */}
-                  <View style={styles.subMetricPill}>
-                    <View style={styles.subMetricIconCircleExpense}>
-                      <AppIcon name="ArrowUp" size={13} color="#FFFFFF" strokeWidth={2.6} />
-                    </View>
-                    <View>
-                      <Text style={styles.subMetricCaption}>Expenses • Nov</Text>
-                      <Text style={styles.subMetricValue}>
-                        {isBalanceHidden
-                          ? '₹••••'
-                          : `-₹${totalExpenses.toLocaleString('en-IN')}`}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              {/* C. 4 CIRCULAR ACTION BUTTONS DIRECTLY BELOW CARD */}
-              <View style={styles.actionCirclesRow}>
-                {/* Button 1: Add */}
-                <View style={styles.actionCircleItem}>
-                  <TouchableOpacity
-                    style={[styles.actionCircleBtn, styles.actionCirclePrimary]}
-                    activeOpacity={0.8}
-                    onPress={() => onOpenAddTransaction?.('expense')}
-                  >
-                    <AppIcon name="Plus" size={22} color="#FFFFFF" strokeWidth={2.4} />
-                  </TouchableOpacity>
-                  <Text style={styles.actionCircleLabel}>Add</Text>
-                </View>
-
-                {/* Button 2: Insights */}
-                <View style={styles.actionCircleItem}>
-                  <TouchableOpacity
-                    style={[styles.actionCircleBtn, styles.actionCircleLight]}
-                    activeOpacity={0.8}
-                    onPress={() => setViewMode('insights')}
-                  >
-                    <AppIcon name="BarChart3" size={20} color={isDark ? '#F58A07' : colors.navyPrimary} strokeWidth={2.2} />
-                  </TouchableOpacity>
-                  <Text style={styles.actionCircleLabel}>Insights</Text>
-                </View>
-
-                {/* Button 3: Goals */}
-                <View style={styles.actionCircleItem}>
-                  <TouchableOpacity
-                    style={[styles.actionCircleBtn, styles.actionCircleLight]}
-                    activeOpacity={0.8}
-                    onPress={() => setGoalsModalVisible(true)}
-                  >
-                    <AppIcon name="Flag" size={19} color={isDark ? '#F58A07' : colors.navyPrimary} strokeWidth={2.2} />
-                  </TouchableOpacity>
-                  <Text style={styles.actionCircleLabel}>Goals</Text>
-                </View>
-
-                {/* Button 4: Tracker */}
-                <View style={styles.actionCircleItem}>
-                  <TouchableOpacity
-                    style={[styles.actionCircleBtn, styles.actionCircleLight]}
-                    activeOpacity={0.8}
-                    onPress={() => onNavigateToTab?.('PE Tracker')}
-                  >
-                    <AppIcon name="ReceiptText" size={19} color={isDark ? '#F58A07' : colors.navyPrimary} strokeWidth={2.2} />
-                  </TouchableOpacity>
-                  <Text style={styles.actionCircleLabel}>Tracker</Text>
-                </View>
-              </View>
-
-              {/* D. NOVEMBER BUDGET CARD */}
-              <View style={styles.cardContainer}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardSectionTitle}>November budget</Text>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => setGoalsModalVisible(true)}
-                  >
-                    <Text style={styles.cardActionLink}>Details →</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.budgetText}>
-                  <Text style={styles.budgetBold}>₹{totalExpenses.toLocaleString('en-IN')}</Text>
-                  {' of '}
-                  <Text style={styles.budgetRegular}>₹{monthlyBudget.toLocaleString('en-IN')}</Text>
-                </Text>
-
-                {/* Progress Bar */}
-                <View style={styles.progressBarTrack}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      {
-                        width: `${budgetSpentPercent}%`,
-                        backgroundColor: budgetSpentPercent > 90 ? '#EF4444' : colors.bluePrimary,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <Text style={styles.budgetSubInfo}>
-                  ₹{budgetRemaining.toLocaleString('en-IN')} left · 16 days to go
-                </Text>
-              </View>
-
-              {/* E. SPENDING BY CATEGORY (SEGMENTED BAR + CATEGORY CARDS) */}
-              <View style={styles.cardContainer}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardSectionTitle}>Spending by category</Text>
-                  <TouchableOpacity
-                    style={styles.dropdownBadge}
-                    activeOpacity={0.7}
-                    onPress={() => setViewMode('insights')}
-                  >
-                    <Text style={styles.dropdownBadgeText}>This month ▾</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Segmented Horizontal Progress Bar */}
-                <View style={styles.segmentedBarTrack}>
-                  {categorySummary.map((cat, idx) => (
-                    <View
-                      key={cat.category}
-                      style={[
-                        styles.segmentedBarSegment,
-                        {
-                          width: `${cat.percentage}%`,
-                          backgroundColor: cat.color,
-                          borderTopLeftRadius: idx === 0 ? 5 : 0,
-                          borderBottomLeftRadius: idx === 0 ? 5 : 0,
-                          borderTopRightRadius: idx === categorySummary.length - 1 ? 5 : 0,
-                          borderBottomRightRadius: idx === categorySummary.length - 1 ? 5 : 0,
-                        },
-                      ]}
-                    />
-                  ))}
-                </View>
-
-                {/* Category Cards below bar */}
-                <View style={styles.categoryCardRow}>
-                  <TouchableOpacity
-                    style={styles.categoryCard}
-                    activeOpacity={0.7}
-                    onPress={() => setSelectedCategoryDetail(categorySummary[0]?.category || 'Food & Dining')}
-                  >
-                    <View style={styles.categoryCardTop}>
-                      <View style={[styles.categoryDot, { backgroundColor: '#EA580C' }]} />
-                      <Text style={styles.categoryCardTitle} numberOfLines={1}>
-                        {categorySummary[0]?.category || 'Food'}
-                      </Text>
-                    </View>
-                    <Text style={styles.categoryCardAmount}>
-                      ₹{(categorySummary[0]?.amount || 14200).toLocaleString('en-IN')}
+                    {/* Large Hero Amount */}
+                    <Text style={styles.balanceAmount}>
+                      {isBalanceHidden ? '₹••••••••' : `₹${netBalance.toLocaleString('en-IN')}`}
                     </Text>
-                  </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={styles.categoryCard}
-                    activeOpacity={0.7}
-                    onPress={() => setSelectedCategoryDetail(categorySummary[1]?.category || 'Shopping')}
-                  >
-                    <View style={styles.categoryCardTop}>
-                      <View style={[styles.categoryDot, { backgroundColor: '#10B981' }]} />
-                      <Text style={styles.categoryCardTitle} numberOfLines={1}>
-                        {categorySummary[1]?.category || 'Shopping'}
-                      </Text>
+                    {/* Sub-Metric Badges Inside Card */}
+                    <View style={styles.subMetricsContainer}>
+                      {/* Income Pill */}
+                      <View style={styles.subMetricPill}>
+                        <View style={styles.subMetricIconCircleIncome}>
+                          <AppIcon name="ArrowDown" size={13} color="#FFFFFF" strokeWidth={2.6} />
+                        </View>
+                        <View>
+                          <Text style={styles.subMetricCaption}>Income • {currentMonthShort}</Text>
+                          <Text style={styles.subMetricValue}>
+                            {isBalanceHidden
+                              ? '₹••••'
+                              : `+₹${totalIncome.toLocaleString('en-IN')}`}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Expenses Pill */}
+                      <View style={styles.subMetricPill}>
+                        <View style={styles.subMetricIconCircleExpense}>
+                          <AppIcon name="ArrowUp" size={13} color="#FFFFFF" strokeWidth={2.6} />
+                        </View>
+                        <View>
+                          <Text style={styles.subMetricCaption}>Expenses • {currentMonthShort}</Text>
+                          <Text style={styles.subMetricValue}>
+                            {isBalanceHidden
+                              ? '₹••••'
+                              : `-₹${totalExpenses.toLocaleString('en-IN')}`}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                    <Text style={styles.categoryCardAmount}>
-                      ₹{(categorySummary[1]?.amount || 12400).toLocaleString('en-IN')}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+                  </View>
 
-              {/* F. RECENT ACTIVITY LIST */}
-              <View style={styles.cardContainer}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardSectionTitle}>Recent Activity</Text>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => onNavigateToTab?.('PE Tracker')}
-                  >
-                    <Text style={styles.cardActionLink}>View All</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.activityList}>
-                  {recentTransactions.map((tx, idx) => {
-                    const isExpense = tx.type !== 'income';
-                    const catConfig = getCategoryIconConfig(tx.category || '', isDark);
-                    return (
-                      <View
-                        key={tx.id || idx}
-                        style={[
-                          styles.activityRow,
-                          idx < recentTransactions.length - 1 && styles.activityRowDivider,
-                        ]}
+                  {/* C. 4 CIRCULAR ACTION BUTTONS DIRECTLY BELOW CARD */}
+                  <View style={styles.actionCirclesRow}>
+                    {/* Button 1: Add */}
+                    <View style={styles.actionCircleItem}>
+                      <TouchableOpacity
+                        style={[styles.actionCircleBtn, styles.actionCirclePrimary]}
+                        activeOpacity={0.8}
+                        onPress={() => onOpenAddTransaction?.(TransactionType.EXPENSE)}
                       >
-                        <View style={styles.activityLeft}>
-                          <View
-                            style={[
-                              styles.activityIconCircle,
-                              { backgroundColor: catConfig.backgroundColor },
-                            ]}
-                          >
-                            <AppIcon
-                              name={catConfig.iconName}
-                              size={16}
-                              color={catConfig.iconColor}
+                        <AppIcon name="Plus" size={22} color="#FFFFFF" strokeWidth={2.4} />
+                      </TouchableOpacity>
+                      <Text style={styles.actionCircleLabel}>Add</Text>
+                    </View>
+
+                    {/* Button 2: Insights */}
+                    <View style={styles.actionCircleItem}>
+                      <TouchableOpacity
+                        style={[styles.actionCircleBtn, styles.actionCircleLight]}
+                        activeOpacity={0.8}
+                        onPress={() => setViewMode('insights')}
+                      >
+                        <AppIcon
+                          name="BarChart3"
+                          size={20}
+                          color={isDark ? '#F58A07' : colors.navyPrimary}
+                          strokeWidth={2.2}
+                        />
+                      </TouchableOpacity>
+                      <Text style={styles.actionCircleLabel}>Insights</Text>
+                    </View>
+
+                    {/* Button 3: Goals */}
+                    <View style={styles.actionCircleItem}>
+                      <TouchableOpacity
+                        style={[styles.actionCircleBtn, styles.actionCircleLight]}
+                        activeOpacity={0.8}
+                        onPress={() => setGoalsModalVisible(true)}
+                      >
+                        <AppIcon
+                          name="Flag"
+                          size={19}
+                          color={isDark ? '#F58A07' : colors.navyPrimary}
+                          strokeWidth={2.2}
+                        />
+                      </TouchableOpacity>
+                      <Text style={styles.actionCircleLabel}>Goals</Text>
+                    </View>
+
+                    {/* Button 4: Tracker */}
+                    <View style={styles.actionCircleItem}>
+                      <TouchableOpacity
+                        style={[styles.actionCircleBtn, styles.actionCircleLight]}
+                        activeOpacity={0.8}
+                        onPress={() => onNavigateToTab?.('PE Tracker')}
+                      >
+                        <AppIcon
+                          name="ReceiptText"
+                          size={19}
+                          color={isDark ? '#F58A07' : colors.navyPrimary}
+                          strokeWidth={2.2}
+                        />
+                      </TouchableOpacity>
+                      <Text style={styles.actionCircleLabel}>Tracker</Text>
+                    </View>
+                  </View>
+
+                  {/* Meaningful Empty State Card when user has zero transactions */}
+                  {!hasFinancialData && (
+                    <View style={styles.emptyJourneyCard}>
+                      <AppIcon name="ReceiptText" size={40} color={colors.bluePrimary} />
+                      <Text style={styles.emptyJourneyTitle}>Your financial journey starts here</Text>
+                      <Text style={styles.emptyJourneySubtitle}>
+                        Add your first transaction to begin tracking your money, categories, and monthly flow.
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.firstTxBtn}
+                        onPress={() => onOpenAddTransaction?.(TransactionType.EXPENSE)}
+                        activeOpacity={0.85}
+                      >
+                        <AppIcon name="Plus" size={17} color="#FFFFFF" strokeWidth={2.5} />
+                        <Text style={styles.firstTxBtnText}>Record First Transaction</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* D. MONTHLY BUDGET CARD */}
+                  <View style={styles.cardContainer}>
+                    <View style={styles.cardHeaderRow}>
+                      <Text style={styles.cardSectionTitle}>{currentMonthName} budget</Text>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={() => setGoalsModalVisible(true)}
+                      >
+                        <Text style={styles.cardActionLink}>Details →</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.budgetRow}>
+                      <Text style={styles.budgetBold}>₹{totalExpenses.toLocaleString('en-IN')}</Text>
+                      <Text style={styles.budgetRegular}> of ₹{monthlyBudget.toLocaleString('en-IN')}</Text>
+                    </View>
+
+                    {/* Progress Bar */}
+                    <View style={styles.progressBarTrack}>
+                      <View
+                        style={[
+                          styles.progressBarFill,
+                          {
+                            width: `${budgetSpentPercent}%`,
+                            backgroundColor:
+                              budgetSpentPercent > 90 ? '#EF4444' : colors.bluePrimary,
+                          },
+                        ]}
+                      />
+                    </View>
+
+                    <Text style={styles.budgetSubInfo}>
+                      {todaySpent > 0 ? `Today: ₹${todaySpent.toLocaleString('en-IN')} · ` : ''}₹{budgetRemaining.toLocaleString('en-IN')} left · {daysRemaining} days to go
+                    </Text>
+                  </View>
+
+                  {/* E. SPENDING BY CATEGORY (SEGMENTED BAR + CATEGORY CARDS) */}
+                  <View style={styles.cardContainer}>
+                    <View style={styles.cardHeaderRow}>
+                      <Text style={styles.cardSectionTitle}>Spending by category</Text>
+                      <TouchableOpacity
+                        style={styles.dropdownBadge}
+                        activeOpacity={0.7}
+                        onPress={() => setViewMode('insights')}
+                      >
+                        <Text style={styles.dropdownBadgeText}>This month ▾</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {categorySummary.length > 0 ? (
+                      <>
+                        {/* Segmented Horizontal Progress Bar */}
+                        <View style={styles.segmentedBarTrack}>
+                          {categorySummary.map((cat, idx) => (
+                            <View
+                              key={cat.category}
+                              style={[
+                                styles.segmentedBarSegment,
+                                {
+                                  width: `${cat.percentage}%`,
+                                  backgroundColor: cat.color,
+                                  borderTopLeftRadius: idx === 0 ? 5 : 0,
+                                  borderBottomLeftRadius: idx === 0 ? 5 : 0,
+                                  borderTopRightRadius:
+                                    idx === categorySummary.length - 1 ? 5 : 0,
+                                  borderBottomRightRadius:
+                                    idx === categorySummary.length - 1 ? 5 : 0,
+                                },
+                              ]}
                             />
-                          </View>
-                          <View>
-                            <Text style={styles.activityMerchantText} numberOfLines={1}>
-                              {tx.merchant}
-                            </Text>
-                            <Text style={styles.activityMetaText}>
-                              {tx.dateStr} · {tx.paymentMethod}
-                            </Text>
-                          </View>
+                          ))}
                         </View>
 
-                        <Text
-                          style={[
-                            styles.activityAmountText,
-                            { color: isExpense ? '#0F172A' : '#16A34A' },
-                          ]}
-                        >
-                          {isExpense ? '-' : '+'}₹{tx.amount.toLocaleString('en-IN')}
-                        </Text>
+                        {/* Category Cards below bar */}
+                        <View style={styles.categoryCardRow}>
+                          {categorySummary.slice(0, 2).map((cat) => (
+                            <TouchableOpacity
+                              key={cat.category}
+                              style={styles.categoryCard}
+                              activeOpacity={0.7}
+                              onPress={() => setSelectedCategoryDetail(cat.category)}
+                            >
+                              <View style={styles.categoryCardTop}>
+                                <View
+                                  style={[styles.categoryDot, { backgroundColor: cat.color }]}
+                                />
+                                <Text style={styles.categoryCardTitle} numberOfLines={1}>
+                                  {cat.category}
+                                </Text>
+                              </View>
+                              <Text style={styles.categoryCardAmount}>
+                                ₹{cat.amount.toLocaleString('en-IN')}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </>
+                    ) : (
+                      <View style={styles.emptySectionBox}>
+                        <AppIcon name="BarChart3" size={28} color={isDark ? '#52525B' : '#94A3B8'} />
+                        <Text style={styles.emptySectionText}>No category spending yet</Text>
                       </View>
-                    );
-                  })}
-                </View>
-              </View>
+                    )}
+                  </View>
 
-              {/* G. TOP INSIGHT CARD */}
-              <View style={styles.topInsightCard}>
-                <View style={styles.topInsightIconBox}>
-                  <AppIcon name="Lightbulb" size={20} color="#854D0E" />
-                </View>
-                <View style={styles.topInsightContent}>
-                  <Text style={styles.topInsightHeader}>TOP INSIGHT</Text>
-                  <Text style={styles.topInsightText}>
-                    You spent 18% less on Food & Dining than last month. You're on track to save ₹22,500!
-                  </Text>
-                </View>
-              </View>
+                  {/* F. RECENT ACTIVITY LIST */}
+                  <View style={styles.cardContainer}>
+                    <View style={styles.cardHeaderRow}>
+                      <Text style={styles.cardSectionTitle}>Recent Activity</Text>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={() => onNavigateToTab?.('PE Tracker')}
+                      >
+                        <Text style={styles.cardActionLink}>View All</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {recentTransactions.length > 0 ? (
+                      <View style={styles.activityList}>
+                        {recentTransactions.map((tx, idx) => {
+                          const isIncome =
+                            tx.type === TransactionType.INCOME;
+                          const catConfig = getCategoryIconConfig(tx.category || '', isDark);
+                          const dateLabel = tx.incurredAt
+                            ? formatTransactionTime(tx.incurredAt)
+                            : 'Today';
+
+                          return (
+                            <TouchableOpacity
+                              key={tx.id || idx}
+                              activeOpacity={0.7}
+                              onPress={() => onEditTransaction?.(tx)}
+                              style={[
+                                styles.activityRow,
+                                idx < recentTransactions.length - 1 && styles.activityRowDivider,
+                              ]}
+                            >
+                              <View style={styles.activityLeft}>
+                                <View
+                                  style={[
+                                    styles.activityIconCircle,
+                                    { backgroundColor: catConfig.backgroundColor },
+                                  ]}
+                                >
+                                  <AppIcon
+                                    name={catConfig.iconName}
+                                    size={16}
+                                    color={catConfig.iconColor}
+                                  />
+                                </View>
+                                <View>
+                                  <Text style={styles.activityMerchantText} numberOfLines={1}>
+                                    {tx.merchant || tx.category}
+                                  </Text>
+                                  <Text style={styles.activityMetaText}>
+                                    {dateLabel} · {tx.paymentMethod}
+                                  </Text>
+                                </View>
+                              </View>
+
+                              <Text
+                                style={[
+                                  styles.activityAmountText,
+                                  {
+                                    color: isIncome
+                                      ? '#16A34A'
+                                      : isDark
+                                      ? '#FFFFFF'
+                                      : '#0F172A',
+                                  },
+                                ]}
+                              >
+                                {isIncome ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN')}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <View style={styles.emptySectionBox}>
+                        <AppIcon name="ReceiptText" size={28} color={isDark ? '#52525B' : '#94A3B8'} />
+                        <Text style={styles.emptySectionText}>No transactions recorded</Text>
+                      </View>
+                    )}
+                  </View>
+                </>
+              )}
             </View>
             {/* End Page 1: Overview */}
 
@@ -791,7 +850,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 })}
               </View>
 
-              {/* C. MONTH PAGINATION SELECTOR ( < October 2026 > ) */}
+              {/* C. MONTH PAGINATION SELECTOR ( < November 2026 > ) */}
               <View style={styles.monthPaginationRow}>
                 <TouchableOpacity
                   style={styles.monthNavArrow}
@@ -810,20 +869,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </TouchableOpacity>
               </View>
 
-              {/* D. TOTAL SPENT HERO CARD (GREEN/NAVY CARD) */}
+              {/* D. TOTAL SPENT HERO CARD */}
               <View style={styles.totalSpentCard}>
-                <Text style={styles.totalSpentCaption}>Total spent in November</Text>
+                <Text style={styles.totalSpentCaption}>Total spent in {currentMonthName}</Text>
                 <Text style={styles.totalSpentAmount}>
-                  ₹{totalExpenses.toLocaleString('en-IN')}
+                  ₹{(analyticsData?.expenses ?? totalExpenses).toLocaleString('en-IN')}
                 </Text>
 
                 <View style={styles.trendBadge}>
                   <AppIcon name="ArrowUp" size={13} color="#A7F3D0" strokeWidth={2.5} />
-                  <Text style={styles.trendBadgeText}>10% more than October</Text>
+                  <Text style={styles.trendBadgeText}>Active tracking</Text>
                 </View>
 
                 <Text style={styles.dailyAverageText}>
-                  About ₹{Math.round(totalExpenses / 20).toLocaleString('en-IN')} a day · 20 days so far
+                  About ₹{Math.round(analyticsData?.averageDailySpend ?? (totalExpenses / 20)).toLocaleString('en-IN')} a day · {analyticsData?.daysInPeriod ?? 20} days so far
                 </Text>
               </View>
 
@@ -833,7 +892,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <Text style={styles.cardSectionTitle}>By category</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
-                    onPress={() => setInsightsCategoryView(insightsCategoryView === 'chart' ? 'list' : 'chart')}
+                    onPress={() =>
+                      setInsightsCategoryView(insightsCategoryView === 'chart' ? 'list' : 'chart')
+                    }
                   >
                     <Text style={styles.cardActionLink}>
                       {insightsCategoryView === 'chart' ? 'List view' : 'Chart view'}
@@ -841,97 +902,100 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   </TouchableOpacity>
                 </View>
 
-                {insightsCategoryView === 'chart' ? (
-                  <View style={styles.donutSectionRow}>
-                    {/* Left: Donut SVG Chart */}
-                    <View style={styles.donutChartWrapper}>
-                      <Svg width={donutSize} height={donutSize} viewBox={`0 0 ${donutSize} ${donutSize}`}>
-                        <G rotation="-90" origin={`${donutCenter}, ${donutCenter}`}>
-                          {categorySummary.map((cat, i) => {
-                            const strokeDasharray = `${(cat.percentage / 100) * donutCircumference} ${donutCircumference}`;
-                            const strokeDashoffset = -((cumulativeOffsetPercent / 100) * donutCircumference);
-                            cumulativeOffsetPercent += cat.percentage;
+                {categorySummary.length > 0 ? (
+                  insightsCategoryView === 'chart' ? (
+                    <View style={styles.donutSectionRow}>
+                      {/* Left: Donut SVG Chart */}
+                      <View style={styles.donutChartWrapper}>
+                        <Svg
+                          width={donutSize}
+                          height={donutSize}
+                          viewBox={`0 0 ${donutSize} ${donutSize}`}
+                        >
+                          <G rotation="-90" origin={`${donutCenter}, ${donutCenter}`}>
+                            {categorySummary.map((cat, i) => {
+                              const strokeDasharray = `${(cat.percentage / 100) * donutCircumference} ${donutCircumference}`;
+                              const strokeDashoffset = -(
+                                (cumulativeOffsetPercent / 100) *
+                                donutCircumference
+                              );
+                              cumulativeOffsetPercent += cat.percentage;
 
-                            return (
-                              <Circle
-                                key={cat.category || i}
-                                cx={donutCenter}
-                                cy={donutCenter}
-                                r={donutRadius}
-                                stroke={cat.color}
-                                strokeWidth={donutStrokeWidth}
-                                strokeDasharray={strokeDasharray}
-                                strokeDashoffset={strokeDashoffset}
-                                strokeLinecap="butt"
-                                fill="transparent"
-                              />
-                            );
-                          })}
-                        </G>
-                      </Svg>
+                              return (
+                                <Circle
+                                  key={cat.category || i}
+                                  cx={donutCenter}
+                                  cy={donutCenter}
+                                  r={donutRadius}
+                                  stroke={cat.color}
+                                  strokeWidth={donutStrokeWidth}
+                                  strokeDasharray={strokeDasharray}
+                                  strokeDashoffset={strokeDashoffset}
+                                  strokeLinecap="butt"
+                                  fill="transparent"
+                                />
+                              );
+                            })}
+                          </G>
+                        </Svg>
 
-                      {/* Donut Center Label: 4 categories */}
-                      <View style={styles.donutCenterHole}>
-                        <Text style={styles.donutCenterCount}>{categorySummary.length}</Text>
-                        <Text style={styles.donutCenterLabel}>categories</Text>
+                        {/* Donut Center Label */}
+                        <View style={styles.donutCenterHole}>
+                          <Text style={styles.donutCenterCount}>{categorySummary.length}</Text>
+                          <Text style={styles.donutCenterLabel}>categories</Text>
+                        </View>
+                      </View>
+
+                      {/* Right: Category Percentage Breakdown */}
+                      <View style={styles.donutLegendList}>
+                        {categorySummary.map((cat) => (
+                          <TouchableOpacity
+                            key={cat.category}
+                            style={styles.donutLegendItem}
+                            activeOpacity={0.7}
+                            onPress={() => setSelectedCategoryDetail(cat.category)}
+                          >
+                            <View style={styles.donutLegendLeft}>
+                              <View style={[styles.categoryDot, { backgroundColor: cat.color }]} />
+                              <Text style={styles.donutLegendName} numberOfLines={1}>
+                                {cat.category}
+                              </Text>
+                            </View>
+                            <Text style={styles.donutLegendPercent}>{cat.percentage}%</Text>
+                          </TouchableOpacity>
+                        ))}
                       </View>
                     </View>
-
-                    {/* Right: Category Percentage Breakdown */}
-                    <View style={styles.donutLegendList}>
+                  ) : (
+                    /* List View of Categories */
+                    <View style={styles.insightsCategoryList}>
                       {categorySummary.map((cat) => (
                         <TouchableOpacity
                           key={cat.category}
-                          style={styles.donutLegendItem}
+                          style={styles.insightsCategoryListItem}
                           activeOpacity={0.7}
                           onPress={() => setSelectedCategoryDetail(cat.category)}
                         >
-                          <View style={styles.donutLegendLeft}>
+                          <View style={styles.insightsCatLeft}>
                             <View style={[styles.categoryDot, { backgroundColor: cat.color }]} />
-                            <Text style={styles.donutLegendName} numberOfLines={1}>
-                              {cat.category}
-                            </Text>
+                            <Text style={styles.insightsCatName}>{cat.category}</Text>
                           </View>
-                          <Text style={styles.donutLegendPercent}>{cat.percentage}%</Text>
+                          <View style={styles.insightsCatRight}>
+                            <Text style={styles.insightsCatAmount}>
+                              ₹{cat.amount.toLocaleString('en-IN')}
+                            </Text>
+                            <Text style={styles.insightsCatPercent}>{cat.percentage}%</Text>
+                          </View>
                         </TouchableOpacity>
                       ))}
                     </View>
-                  </View>
+                  )
                 ) : (
-                  /* List View of Categories */
-                  <View style={styles.insightsCategoryList}>
-                    {categorySummary.map((cat) => (
-                      <TouchableOpacity
-                        key={cat.category}
-                        style={styles.insightsCategoryListItem}
-                        activeOpacity={0.7}
-                        onPress={() => setSelectedCategoryDetail(cat.category)}
-                      >
-                        <View style={styles.insightsCatLeft}>
-                          <View style={[styles.categoryDot, { backgroundColor: cat.color }]} />
-                          <Text style={styles.insightsCatName}>{cat.category}</Text>
-                        </View>
-                        <View style={styles.insightsCatRight}>
-                          <Text style={styles.insightsCatAmount}>₹{cat.amount.toLocaleString('en-IN')}</Text>
-                          <Text style={styles.insightsCatPercent}>{cat.percentage}%</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ))}
+                  <View style={styles.emptySectionBox}>
+                    <AppIcon name="BarChart3" size={28} color={isDark ? '#52525B' : '#94A3B8'} />
+                    <Text style={styles.emptySectionText}>No category spending yet</Text>
                   </View>
                 )}
-              </View>
-
-              {/* F. TOP INSIGHT CARD IN INSIGHTS VIEW */}
-              <View style={styles.topInsightCard}>
-                <View style={styles.topInsightIconBox}>
-                  <AppIcon name="Lightbulb" size={20} color="#854D0E" />
-                </View>
-                <View style={styles.topInsightContent}>
-                  <Text style={styles.topInsightHeader}>TOP INSIGHT</Text>
-                  <Text style={styles.topInsightText}>
-                    You spent 18% more on Food & Dining than in October. Adjust your food budget to stay on track.
-                  </Text>
-                </View>
               </View>
             </View>
             {/* End Page 2: Insights */}
@@ -942,7 +1006,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       </ScrollView>
 
       {/* ======================================================== */}
-      {/* CATEGORY DRILLDOWN MODAL (Reference Screen 3)            */}
+      {/* CATEGORY DRILLDOWN MODAL                                 */}
       {/* ======================================================== */}
       <Modal
         visible={Boolean(selectedCategoryDetail)}
@@ -975,48 +1039,35 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <AppIcon name="Coffee" size={24} color="#FFFFFF" />
               </View>
               <Text style={styles.drilldownAmount}>
-                ₹{(activeDrilldownCategory?.amount || 14200).toLocaleString('en-IN')}
+                ₹{(activeDrilldownCategory?.amount || 0).toLocaleString('en-IN')}
               </Text>
-              <Text style={styles.drilldownTrend}>↑ 18% more than October</Text>
+              <Text style={styles.drilldownTrend}>Active category</Text>
             </View>
 
             {/* Category Budget Card */}
             <View style={styles.drilldownBudgetCard}>
               <View style={styles.cardHeaderRow}>
                 <Text style={styles.drilldownBudgetTitle}>Category budget</Text>
-                <Text style={styles.cardActionLink}>Edit</Text>
               </View>
               <Text style={styles.budgetText}>
                 <Text style={styles.budgetBold}>
-                  ₹{(activeDrilldownCategory?.amount || 14200).toLocaleString('en-IN')}
+                  ₹{(activeDrilldownCategory?.amount || 0).toLocaleString('en-IN')}
                 </Text>
-                {' of ₹18,000'}
               </Text>
               <View style={styles.progressBarTrack}>
                 <View
                   style={[
                     styles.progressBarFill,
-                    { width: '78%', backgroundColor: activeDrilldownCategory?.color || '#EA580C' },
+                    {
+                      width: `${Math.min(100, activeDrilldownCategory?.percentage || 0)}%`,
+                      backgroundColor: activeDrilldownCategory?.color || '#EA580C',
+                    },
                   ]}
                 />
               </View>
-              <Text style={styles.budgetSubInfo}>78% used · ₹3,800 left for 16 days</Text>
-            </View>
-
-            {/* 3 Metric Cards */}
-            <View style={styles.drilldownMetricsRow}>
-              <View style={styles.drilldownMetricBox}>
-                <Text style={styles.drilldownMetricLabel}>Transactions</Text>
-                <Text style={styles.drilldownMetricValue}>14</Text>
-              </View>
-              <View style={styles.drilldownMetricBox}>
-                <Text style={styles.drilldownMetricLabel}>Average</Text>
-                <Text style={styles.drilldownMetricValue}>₹1,014</Text>
-              </View>
-              <View style={styles.drilldownMetricBox}>
-                <Text style={styles.drilldownMetricLabel}>Biggest</Text>
-                <Text style={styles.drilldownMetricValue}>₹4,200</Text>
-              </View>
+              <Text style={styles.budgetSubInfo}>
+                {activeDrilldownCategory?.percentage || 0}% of total monthly expenses
+              </Text>
             </View>
 
             <TouchableOpacity
@@ -1040,10 +1091,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.goalsSheet}>
-            <Text style={styles.goalsTitle}>November Budget Details</Text>
+            <Text style={styles.goalsTitle}>{currentMonthName} Budget Details</Text>
             <Text style={styles.goalsSubtitle}>
-              You have set a monthly cap of ₹65,000. You've used ₹{totalExpenses.toLocaleString('en-IN')}{' '}
-              ({budgetSpentPercent}%) with ₹{budgetRemaining.toLocaleString('en-IN')} remaining.
+              You have a monthly budget of ₹{monthlyBudget.toLocaleString('en-IN')}. You've used ₹
+              {totalExpenses.toLocaleString('en-IN')} ({budgetSpentPercent}%) with ₹
+              {budgetRemaining.toLocaleString('en-IN')} remaining for the next {daysRemaining} days.
             </Text>
 
             <TouchableOpacity
@@ -1055,6 +1107,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </View>
         </View>
       </Modal>
+
       {/* ======================================================== */}
       {/* NOTIFICATIONS FULL-SCREEN MODAL                         */}
       {/* ======================================================== */}
@@ -1090,6 +1143,109 @@ const createStyles = (themeColors: typeof colors, isDark: boolean) =>
     },
     bottomSpacer: {
       height: 96,
+    },
+
+    // Loading / Error
+    loadingContainer: {
+      paddingVertical: 60,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    loadingText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: isDark ? '#A1A1AA' : '#64748B',
+      marginTop: 12,
+    },
+    errorContainer: {
+      backgroundColor: isDark ? '#1C1917' : '#FEF2F2',
+      borderRadius: 18,
+      padding: 24,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? '#7F1D1D' : '#FCA5A5',
+      marginBottom: 20,
+    },
+    errorTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#EF4444',
+      marginTop: 8,
+      marginBottom: 4,
+    },
+    errorSubtitle: {
+      fontSize: 13,
+      color: isDark ? '#A1A1AA' : '#64748B',
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    retryBtn: {
+      backgroundColor: colors.bluePrimary,
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      borderRadius: 12,
+    },
+    retryBtnText: {
+      color: '#FFFFFF',
+      fontWeight: '700',
+      fontSize: 13.5,
+    },
+
+    // Empty Journey Card
+    emptyJourneyCard: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 20,
+      padding: 22,
+      marginBottom: 16,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.04,
+      shadowRadius: 8,
+      elevation: isDark ? 0 : 2,
+    },
+    emptyJourneyTitle: {
+      fontSize: 17,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      marginTop: 10,
+      marginBottom: 6,
+      textAlign: 'center',
+    },
+    emptyJourneySubtitle: {
+      fontSize: 13,
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      textAlign: 'center',
+      lineHeight: 19,
+      marginBottom: 16,
+      paddingHorizontal: 8,
+    },
+    firstTxBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      backgroundColor: colors.bluePrimary,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 14,
+    },
+    firstTxBtnText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    emptySectionBox: {
+      paddingVertical: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+    },
+    emptySectionText: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.42)' : '#94A3B8',
     },
 
     // Top Segmented Switcher (Overview | Insights)
@@ -1348,7 +1504,7 @@ const createStyles = (themeColors: typeof colors, isDark: boolean) =>
       backgroundColor: colors.bluePrimary,
       shadowColor: colors.bluePrimary,
       shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.30,
+      shadowOpacity: 0.3,
       shadowRadius: 8,
       elevation: 4,
     },
@@ -1414,6 +1570,11 @@ const createStyles = (themeColors: typeof colors, isDark: boolean) =>
     },
 
     // Budget Card Elements
+    budgetRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      marginBottom: 10,
+    },
     budgetText: {
       marginBottom: 10,
     },
@@ -1528,42 +1689,6 @@ const createStyles = (themeColors: typeof colors, isDark: boolean) =>
     activityAmountText: {
       fontSize: 14.5,
       fontWeight: '700',
-    },
-
-    // Top Insight Card
-    topInsightCard: {
-      flexDirection: 'row',
-      backgroundColor: isDark ? '#1C1608' : '#FEF9C3',
-      borderColor: isDark ? '#78350F' : '#FDE047',
-      borderWidth: 1,
-      borderRadius: 18,
-      padding: 16,
-      gap: 12,
-      marginBottom: 16,
-    },
-    topInsightIconBox: {
-      width: 40,
-      height: 40,
-      borderRadius: 12,
-      backgroundColor: isDark ? '#854D0E' : '#FACC15',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    topInsightContent: {
-      flex: 1,
-    },
-    topInsightHeader: {
-      fontSize: 11,
-      fontWeight: '800',
-      color: isDark ? '#FBBF24' : '#854D0E',
-      letterSpacing: 0.5,
-      marginBottom: 4,
-    },
-    topInsightText: {
-      fontSize: 13,
-      color: isDark ? '#FDE68A' : '#713F12',
-      lineHeight: 18,
-      fontWeight: '500',
     },
 
     // ========================================================
@@ -1851,31 +1976,6 @@ const createStyles = (themeColors: typeof colors, isDark: boolean) =>
     },
     drilldownBudgetTitle: {
       fontSize: 14,
-      fontWeight: '700',
-      color: isDark ? '#FFFFFF' : '#0F172A',
-    },
-    drilldownMetricsRow: {
-      flexDirection: 'row',
-      gap: 10,
-      marginBottom: 20,
-    },
-    drilldownMetricBox: {
-      flex: 1,
-      backgroundColor: isDark ? '#000000' : '#F8FAFC',
-      borderRadius: 14,
-      padding: 12,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
-      alignItems: 'center',
-    },
-    drilldownMetricLabel: {
-      fontSize: 11,
-      color: isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B',
-      fontWeight: '500',
-      marginBottom: 4,
-    },
-    drilldownMetricValue: {
-      fontSize: 15,
       fontWeight: '700',
       color: isDark ? '#FFFFFF' : '#0F172A',
     },
