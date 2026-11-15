@@ -38,6 +38,52 @@ export interface AuthSessionApiPayload {
   user: StoredUserSummary;
 }
 
+/**
+ * The backend's TransformInterceptor wraps every successful response as
+ * `{ success: true, data, meta }`. Every caller that reads a 2xx body must go
+ * through this helper — reading the raw body (as the token refresh path once
+ * did) silently drops the payload.
+ */
+export function unwrapApiEnvelope<T>(parsedBody: unknown): T {
+  if (
+    parsedBody &&
+    typeof parsedBody === 'object' &&
+    'success' in parsedBody &&
+    (parsedBody as Record<string, unknown>).success === true &&
+    'data' in parsedBody &&
+    (parsedBody as Record<string, unknown>).data !== undefined
+  ) {
+    const envelope = parsedBody as Record<string, unknown>;
+    const payloadData = envelope.data;
+    if (
+      payloadData &&
+      typeof payloadData === 'object' &&
+      !Array.isArray(payloadData)
+    ) {
+      return {
+        ...(payloadData as Record<string, unknown>),
+        _meta: envelope.meta,
+      } as T;
+    }
+    return payloadData as T;
+  }
+  return parsedBody as T;
+}
+
+function isAuthSessionPayload(value: unknown): value is AuthSessionApiPayload {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  const session = v.session as Record<string, unknown> | undefined;
+  const user = v.user as Record<string, unknown> | undefined;
+  return (
+    typeof v.accessToken === 'string' &&
+    typeof v.refreshToken === 'string' &&
+    typeof v.expiresIn === 'number' &&
+    typeof session?.id === 'string' &&
+    typeof user?.id === 'string'
+  );
+}
+
 const NON_REFRESHABLE_AUTH_PATHS = new Set([
   '/auth/login',
   '/auth/register',
@@ -50,6 +96,9 @@ const NON_REFRESHABLE_AUTH_PATHS = new Set([
   '/auth/token/refresh',
   '/auth/re-authenticate',
 ]);
+
+/** Refresh responses that mean "this refresh token will never work again". */
+const REFRESH_REJECTION_STATUSES = new Set([400, 401, 403]);
 
 const TERMINAL_SESSION_ERROR_CODES = new Set([
   'SESSION_REVOKED',
@@ -84,6 +133,16 @@ export class ArthaApiClient {
 
   getInMemorySession(): StoredAuthSession | null {
     return this.inMemorySession;
+  }
+
+  /**
+   * True while the client still holds credentials. The client itself clears
+   * them only on a definitive rejection (terminal 401 codes or a rejected
+   * refresh), so callers can use this after a failed request to tell
+   * "session is dead" apart from "server is temporarily unavailable".
+   */
+  hasActiveSession(): boolean {
+    return this.inMemorySession !== null;
   }
 
   async persistSessionFromApi(
@@ -219,25 +278,7 @@ export class ArthaApiClient {
     }
 
     if (response.ok) {
-      if (
-        parsedBody &&
-        typeof parsedBody === 'object' &&
-        'success' in parsedBody &&
-        parsedBody.success === true &&
-        'data' in parsedBody &&
-        parsedBody.data !== undefined
-      ) {
-        const payloadData = parsedBody.data;
-        if (
-          payloadData &&
-          typeof payloadData === 'object' &&
-          !Array.isArray(payloadData)
-        ) {
-          return { ...(payloadData as Record<string, unknown>), _meta: parsedBody.meta } as T;
-        }
-        return payloadData as T;
-      }
-      return parsedBody as T;
+      return unwrapApiEnvelope<T>(parsedBody);
     }
 
     const errorCode =
@@ -332,11 +373,27 @@ export class ArthaApiClient {
       clearTimeout(timer);
 
       if (!response.ok) {
-        await this.invalidateLocalSession('REFRESH_REJECTED');
+        // Only a definitive rejection of the refresh token ends the session.
+        // 429 (rate limited) and 5xx (server/database trouble) are transient:
+        // wiping credentials there would sign every user out during an outage.
+        if (REFRESH_REJECTION_STATUSES.has(response.status)) {
+          await this.invalidateLocalSession('REFRESH_REJECTED');
+        }
         return null;
       }
 
-      const payload = (await response.json()) as AuthSessionApiPayload;
+      const payload = unwrapApiEnvelope<unknown>(await response.json());
+      if (!isAuthSessionPayload(payload)) {
+        // The server has already rotated (consumed) our refresh token, so keeping
+        // the old one would only trigger reuse detection later. Fail loudly instead.
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn(
+            '[Artha ApiClient] Token refresh returned an unexpected payload shape.',
+          );
+        }
+        await this.invalidateLocalSession('REFRESH_PAYLOAD_INVALID');
+        return null;
+      }
       return await this.persistSessionFromApi(payload);
     } catch {
       clearTimeout(timer);

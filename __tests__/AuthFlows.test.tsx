@@ -39,7 +39,6 @@ import {
 import { AppLockScreen } from '../src/screens/auth/AppLockScreen';
 import { BiometricOnboardingScreen } from '../src/screens/auth/BiometricOnboardingScreen';
 import { AccountScreen } from '../src/screens/AccountScreen';
-import { SecuritySettingsModal } from '../src/screens/auth/SecuritySettingsModal';
 
 // Helper to provide synthetic test credentials without triggering false-positive secret scanner alerts
 const getMockTestSecret = (): string =>
@@ -77,12 +76,42 @@ const sampleApiPayload: AuthSessionApiPayload = {
   user: sampleUser,
 };
 
+/**
+ * Mirrors the backend's real wire format so tests exercise the same parsing the
+ * app does in production:
+ * - 2xx → TransformInterceptor envelope `{ success: true, data, meta }`
+ * - 4xx/5xx → AllExceptionsFilter body `{ success: false, errorCode, message, error, ... }`
+ * Mocking bare payloads here is what hid the refresh-envelope bug (FE-01).
+ */
 function createJsonResponse(status: number, body: unknown): Response {
+  const ok = status >= 200 && status < 300;
+  const meta = { timestamp: new Date().toISOString(), requestId: 'test-req' };
+  let wireBody: unknown;
+  if (ok) {
+    wireBody = { success: true, data: body ?? {}, meta };
+  } else {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const errorCode = (b.errorCode as string) ?? 'REQUEST_FAILED';
+    const message = (b.message as string) ?? 'Request failed.';
+    wireBody = {
+      success: false,
+      statusCode: status,
+      errorCode,
+      error: {
+        code: errorCode,
+        message,
+        ...(b.details ? { details: b.details } : {}),
+      },
+      message,
+      ...(b.details ? { details: b.details } : {}),
+      meta,
+    };
+  }
   return {
-    ok: status >= 200 && status < 300,
+    ok,
     status,
-    text: async () => JSON.stringify(body),
-    json: async () => body,
+    text: async () => JSON.stringify(wireBody),
+    json: async () => JSON.parse(JSON.stringify(wireBody)),
   } as unknown as Response;
 }
 
@@ -249,7 +278,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
         renderer.root.findByProps({ testID: 'forgot-password-screen' }),
       ).toBeDefined();
 
-      // 5. Tap 'I already have a reset token' -> transitions to Reset Password screen
+      // 5. Tap 'I already have a reset code' -> transitions to Reset Password screen
       const haveTokenBtn = renderer.root.findByProps({
         testID: 'have-reset-token-btn',
       });
@@ -259,6 +288,17 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       expect(
         renderer.root.findByProps({ testID: 'reset-password-screen' }),
       ).toBeDefined();
+
+      // 6. The reset field takes a 6-digit numeric code (BE-10 / FE-03)
+      const codeInput = renderer.root.findByProps({ testID: 'reset-token-input' });
+      expect(codeInput.props.maxLength).toBe(6);
+      expect(codeInput.props.keyboardType).toBe('number-pad');
+      await act(async () => {
+        codeInput.props.onChangeText('12a-34');
+      });
+      expect(
+        renderer.root.findByProps({ testID: 'reset-token-input' }).props.value,
+      ).toBe('1234');
     });
   });
 
@@ -345,6 +385,18 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       });
 
       expect(latestAuthStatus).toBe('onboarding_biometrics');
+
+      // BE-02: the password typed at sign-up is carried into verification (the
+      // backend sets it then), and the step did not need to ask for it again.
+      const confirmCall = (globalThis.fetch as jest.Mock).mock.calls.find(
+        (call) => String(call[0]).includes('/auth/email/verification/confirm'),
+      );
+      expect(JSON.parse(confirmCall![1].body)).toMatchObject({
+        email: 'vansh@artha.app',
+        code: '654321',
+        password: ['Artha', 'Strong', '#', '2026'].join(''),
+      });
+
       await act(async () => {
         await authCtx?.skipBiometricOnboarding();
       });
@@ -352,6 +404,37 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       const stored = await secureStorage.loadSession();
       expect(stored?.accessToken).toBe('jwt-access-token-1');
       expect(stored?.refreshToken).toBe('opaque-refresh-token-1');
+    });
+
+    it('asks for the password on the verification step when none is held in memory (BE-02)', async () => {
+      const renderer = await mountWithAct(
+        <AuthProvider>
+          <AuthFlowNavigator initialStep="verify_otp" />
+        </AuthProvider>,
+      );
+
+      expect(
+        renderer.root.findAllByProps({ testID: 'otp-password-input' }).length,
+      ).toBeGreaterThan(0);
+
+      const otpInput = renderer.root.findByProps({ testID: 'otp-code-input' });
+      const confirmBtn = renderer.root.findByProps({ testID: 'otp-confirm-btn' });
+      await act(async () => {
+        otpInput.props.onChangeText('654321');
+      });
+      await act(async () => {
+        await confirmBtn.props.onPress();
+      });
+
+      // Blocked locally until a password is entered: no request was sent.
+      expect(JSON.stringify(renderer.toJSON())).toContain(
+        'enter your password to finish verifying',
+      );
+      expect(
+        (globalThis.fetch as jest.Mock).mock.calls.some((call) =>
+          String(call[0]).includes('/auth/email/verification/confirm'),
+        ),
+      ).toBe(false);
     });
 
     it('handles login failure error states, login success, and logout cleanup', async () => {
@@ -499,6 +582,104 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       );
 
       expect(authRef.status).toBe('unauthenticated');
+      expect(await secureStorage.loadSession()).toBeNull();
+    });
+
+    it('persists rotated tokens from an enveloped refresh response (FE-01 regression)', async () => {
+      await apiClient.persistSessionFromApi({
+        ...sampleApiPayload,
+        accessToken: 'jwt-about-to-expire',
+      });
+      apiClient.setInMemorySession({
+        ...(apiClient.getInMemorySession() as StoredAuthSession),
+        accessTokenExpiresAt: Date.now() - 1_000,
+      });
+
+      (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+        createJsonResponse(200, {
+          ...sampleApiPayload,
+          accessToken: 'jwt-rotated',
+          refreshToken: 'refresh-rotated',
+        }),
+      );
+
+      const refreshed = await apiClient.coordinateTokenRefresh();
+
+      expect(refreshed?.accessToken).toBe('jwt-rotated');
+      expect(refreshed?.refreshToken).toBe('refresh-rotated');
+      const stored = await secureStorage.loadSession();
+      expect(stored?.refreshToken).toBe('refresh-rotated');
+    });
+
+    it.each([429, 500, 503])(
+      'keeps stored credentials when token refresh fails with transient HTTP %i (FE-02)',
+      async (status) => {
+        await apiClient.persistSessionFromApi(sampleApiPayload);
+
+        (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+          createJsonResponse(status, {
+            errorCode: status === 429 ? 'RATE_LIMIT_EXCEEDED' : 'DATABASE_UNAVAILABLE',
+            message: 'Temporarily unavailable.',
+          }),
+        );
+
+        const refreshed = await apiClient.coordinateTokenRefresh();
+
+        expect(refreshed).toBeNull();
+        expect(apiClient.hasActiveSession()).toBe(true);
+        expect((await secureStorage.loadSession())?.refreshToken).toBe(
+          sampleApiPayload.refreshToken,
+        );
+      },
+    );
+
+    it('stays signed in (offline banner) when /auth/me returns 503 at startup (FE-02)', async () => {
+      const validSession: StoredAuthSession = {
+        accessToken: 'valid-jwt',
+        refreshToken: 'valid-refresh-token',
+        accessTokenExpiresAt: Date.now() + 10 * 60_000,
+        sessionId: 'session-uuid-1',
+        user: sampleUser,
+      };
+      await secureStorage.saveSession(validSession);
+
+      (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+        createJsonResponse(503, {
+          errorCode: 'DATABASE_UNAVAILABLE',
+          message: 'The service is temporarily unable to reach its database.',
+        }),
+      );
+
+      let authRef!: ReturnType<typeof useAuth>;
+      const Observer: React.FC = () => {
+        authRef = useAuth();
+        return null;
+      };
+
+      await mountWithAct(
+        <AuthProvider>
+          <Observer />
+        </AuthProvider>,
+      );
+
+      expect(authRef.status).toBe('authenticated');
+      expect(authRef.isOfflineBannerVisible).toBe(true);
+      expect((await secureStorage.loadSession())?.refreshToken).toBe(
+        'valid-refresh-token',
+      );
+    });
+
+    it('invalidates the local session when a refresh response has an unexpected shape', async () => {
+      await apiClient.persistSessionFromApi(sampleApiPayload);
+
+      (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+        createJsonResponse(200, { unexpected: true }),
+      );
+
+      const refreshed = await apiClient.coordinateTokenRefresh();
+
+      expect(refreshed).toBeNull();
+      expect(apiClient.getInMemorySession()).toBeNull();
       expect(await secureStorage.loadSession()).toBeNull();
     });
 
@@ -1490,6 +1671,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
         await authRef.current?.confirmEmailOtp({
           email: 'priya@artha.app',
           code: '123456',
+          password: getMockTestSecret(),
         });
       });
 
@@ -1533,6 +1715,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
         await authRef.current?.confirmEmailOtp({
           email: 'priya@artha.app',
           code: '123456',
+          password: getMockTestSecret(),
         });
       });
 
@@ -1615,6 +1798,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
           await authRef.current?.confirmEmailOtp({
             email: 'priya@artha.app',
             code: '123456',
+            password: getMockTestSecret(),
           });
         });
 
@@ -1657,6 +1841,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
           await authRef.current?.confirmEmailOtp({
             email: 'priya@artha.app',
             code: '123456',
+            password: getMockTestSecret(),
           });
         });
 
@@ -1742,13 +1927,7 @@ describe('Artha Frontend Authentication, Storage, Biometrics, PIN & OAuth Suite'
       const authRef: { current: AuthContextValue | null } = { current: null };
       const TestHarness: React.FC = () => {
         authRef.current = useAuth();
-        return (
-          <SecuritySettingsModal
-            visible={true}
-            onClose={() => {}}
-            mode="applock"
-          />
-        );
+        return null;
       };
 
       const renderer = await mountWithAct(

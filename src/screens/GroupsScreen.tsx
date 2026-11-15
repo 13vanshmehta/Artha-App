@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { AppIcon } from '../components/icons/AppIcon';
 import { colors } from '../theme/colors';
+import { useTheme } from '../context/ThemeContext';
 import {
   mockGroups,
   mockPendingSettlements,
@@ -29,6 +30,8 @@ interface GroupsScreenProps {
 export const GroupsScreen: React.FC<GroupsScreenProps> = ({
   onScrollingChange,
 }) => {
+  const { isDark, colors: themeColors } = useTheme();
+  const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
   const [refreshing, setRefreshing] = useState(false);
   const [groups, setGroups] = useState<MockGroupItem[]>(mockGroups);
   const [selectedGroup, setSelectedGroup] = useState<MockGroupItem | null>(null);
@@ -308,7 +311,7 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
               >
                 <View style={styles.groupCardTop}>
                   <View style={styles.groupAvatarCircle}>
-                    <AppIcon name="Users" size={20} color={colors.navyPrimary} />
+                    <AppIcon name="Users" size={20} color={isDark ? '#F58A07' : colors.navyPrimary} />
                   </View>
 
                   <View style={styles.groupMain}>
@@ -318,7 +321,7 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
                     </Text>
                   </View>
 
-                  <AppIcon name="ChevronRight" size={18} color="#94A3B8" />
+                  <AppIcon name="ChevronRight" size={18} color={isDark ? '#71717A' : '#94A3B8'} />
                 </View>
 
                 <View style={styles.groupCardDivider} />
@@ -361,7 +364,7 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create New Group</Text>
               <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
-                <AppIcon name="X" size={20} color="#64748B" />
+                <AppIcon name="X" size={20} color={isDark ? '#A1A1AA' : '#64748B'} />
               </TouchableOpacity>
             </View>
 
@@ -408,7 +411,7 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
                   </Text>
                 </View>
                 <TouchableOpacity onPress={() => setSelectedGroup(null)}>
-                  <AppIcon name="X" size={20} color="#64748B" />
+                  <AppIcon name="X" size={20} color={isDark ? '#A1A1AA' : '#64748B'} />
                 </TouchableOpacity>
               </View>
 
@@ -714,7 +717,7 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
               <TouchableOpacity
                 onPress={() => setAddExpenseModalVisible(false)}
               >
-                <AppIcon name="X" size={20} color="#64748B" />
+                <AppIcon name="X" size={20} color={isDark ? '#A1A1AA' : '#64748B'} />
               </TouchableOpacity>
             </View>
 
@@ -755,477 +758,486 @@ export const GroupsScreen: React.FC<GroupsScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#F2F3F7',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 40,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  headerCaption: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    letterSpacing: 1.1,
-    marginBottom: 3,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: -0.6,
-  },
-  newGroupBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bluePrimary,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    gap: 6,
-  },
-  newGroupBtnText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  balanceSummaryCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.navyDeep,
-    borderRadius: 22,
-    padding: 20,
-    marginBottom: 20,
-    borderWidth: 1.2,
-    borderColor: 'rgba(144, 210, 245, 0.22)',
-    shadowColor: '#01151E',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 14,
-    elevation: 6,
-  },
-  balanceCol: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  balanceLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.75)',
-    marginBottom: 6,
-  },
-  balanceValue: {
-    fontSize: 24,
-    fontWeight: '900',
-    letterSpacing: -0.5,
-    marginBottom: 4,
-  },
-  balanceSub: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.55)',
-  },
-  balanceDivider: {
-    width: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    marginVertical: 4,
-  },
-  settlementSection: {
-    marginBottom: 22,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    marginBottom: 10,
-    letterSpacing: -0.2,
-  },
-  settlementCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  settlementIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#DCFCE7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  settlementMain: {
-    flex: 1,
-    marginRight: 10,
-  },
-  settlementTitle: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  settlementSub: {
-    fontSize: 11.5,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  remindBtn: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  remindBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.bluePrimary,
-  },
-  payBtn: {
-    backgroundColor: '#EA580C',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 12,
-  },
-  payBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  groupsSection: {
-    marginBottom: 20,
-  },
-  groupCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  groupCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  groupAvatarCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: colors.blueBadge,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  groupMain: {
-    flex: 1,
-  },
-  groupName: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  groupMeta: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  groupCardDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 12,
-  },
-  groupCardBottom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  groupStatusText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: colors.navyPrimary,
-  },
-  groupActionText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.bluePrimary,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingTop: 20,
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  groupDetailsSub: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  tabBarRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    backgroundColor: '#F8FAFC',
-  },
-  tabBarBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  tabBarBtnActive: {
-    borderBottomWidth: 2.5,
-    borderBottomColor: colors.bluePrimary,
-    backgroundColor: '#FFFFFF',
-  },
-  tabBarBtnText: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  tabBarBtnTextActive: {
-    color: colors.bluePrimary,
-    fontWeight: '800',
-  },
-  modalBody: {
-    padding: 22,
-  },
-  inputLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748B',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  textInput: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  modalActionBtn: {
-    backgroundColor: colors.bluePrimary,
-    borderRadius: 16,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 20,
-    shadowColor: colors.bluePrimary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  modalActionBtnText: {
-    fontSize: 14.5,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  detailsScroll: {
-    padding: 22,
-  },
-  groupKpiBar: {
-    flexDirection: 'row',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  groupKpiItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  groupKpiLabel: {
-    fontSize: 11,
-    color: '#64748B',
-    marginBottom: 4,
-  },
-  groupKpiValue: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  actionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.blueBadge,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(144, 210, 245, 0.3)',
-  },
-  actionBannerText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.navyPrimary,
-    flex: 1,
-    marginRight: 8,
-  },
-  bannerBtn: {
-    backgroundColor: colors.bluePrimary,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-  bannerBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  expenseFeed: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 16,
-  },
-  expenseItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  expenseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.bluePrimary,
-    marginRight: 10,
-  },
-  settlementIconSmall: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  memberAvatarCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.navyPrimary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  memberAvatarInitial: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  youBadge: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  youBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.bluePrimary,
-  },
-  emptyStateBox: {
-    padding: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    marginBottom: 14,
-  },
-  emptyStateText: {
-    fontSize: 13,
-    color: '#64748B',
-  },
-  expenseMain: {
-    flex: 1,
-  },
-  expenseItemTitle: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  expenseItemPayer: {
-    fontSize: 11.5,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  expenseItemAmount: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  addGroupExpenseBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.bluePrimary,
-    borderRadius: 16,
-    paddingVertical: 14,
-    gap: 8,
-    shadowColor: colors.bluePrimary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  addGroupExpenseBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  bottomSpacer: {
-    height: 100,
-  },
-});
+const createStyles = (themeColors: typeof colors, isDark: boolean) =>
+  StyleSheet.create({
+    screen: {
+      flex: 1,
+      backgroundColor: isDark ? '#000000' : '#F2F3F7',
+    },
+    scrollContent: {
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 40,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 16,
+    },
+    headerCaption: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: isDark ? '#A1A1AA' : colors.textSecondary,
+      letterSpacing: 1.1,
+      marginBottom: 3,
+    },
+    headerTitle: {
+      fontSize: 28,
+      fontWeight: '900',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      letterSpacing: -0.6,
+    },
+    newGroupBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.bluePrimary,
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      gap: 6,
+    },
+    newGroupBtnText: {
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    balanceSummaryCard: {
+      flexDirection: 'row',
+      backgroundColor: isDark ? '#000000' : colors.navyDeep,
+      borderRadius: 22,
+      padding: 20,
+      marginBottom: 20,
+      borderWidth: 1,
+      borderColor: isDark ? '#F58A07' : 'rgba(144, 210, 245, 0.22)',
+      shadowColor: '#01151E',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: isDark ? 0 : 0.3,
+      shadowRadius: 14,
+      elevation: isDark ? 0 : 6,
+    },
+    balanceCol: {
+      flex: 1,
+      alignItems: 'center',
+    },
+    balanceLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: 'rgba(255, 255, 255, 0.75)',
+      marginBottom: 6,
+    },
+    balanceValue: {
+      fontSize: 24,
+      fontWeight: '900',
+      letterSpacing: -0.5,
+      marginBottom: 4,
+    },
+    balanceSub: {
+      fontSize: 11,
+      color: 'rgba(255, 255, 255, 0.55)',
+    },
+    balanceDivider: {
+      width: 1,
+      backgroundColor: 'rgba(255, 255, 255, 0.12)',
+      marginVertical: 4,
+    },
+    settlementSection: {
+      marginBottom: 22,
+    },
+    sectionTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+      marginBottom: 10,
+      letterSpacing: -0.2,
+    },
+    settlementCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 18,
+      padding: 14,
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.04,
+      shadowRadius: 6,
+      elevation: isDark ? 0 : 2,
+    },
+    settlementIconCircle: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: isDark ? 'rgba(34, 197, 94, 0.2)' : '#DCFCE7',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    settlementMain: {
+      flex: 1,
+      marginRight: 10,
+    },
+    settlementTitle: {
+      fontSize: 13.5,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    settlementSub: {
+      fontSize: 11.5,
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginTop: 2,
+    },
+    remindBtn: {
+      backgroundColor: isDark ? '#000000' : '#EFF6FF',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#BFDBFE',
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 12,
+    },
+    remindBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? '#F58A07' : colors.bluePrimary,
+    },
+    payBtn: {
+      backgroundColor: '#EA580C',
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 12,
+    },
+    payBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    groupsSection: {
+      marginBottom: 20,
+    },
+    groupCard: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 20,
+      padding: 16,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.04,
+      shadowRadius: 8,
+      elevation: isDark ? 0 : 2,
+    },
+    groupCardTop: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    groupAvatarCircle: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: isDark ? 'rgba(245, 138, 7, 0.22)' : colors.blueBadge,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    groupMain: {
+      flex: 1,
+    },
+    groupName: {
+      fontSize: 16,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    groupMeta: {
+      fontSize: 12,
+      color: isDark ? '#A1A1AA' : '#64748B',
+      marginTop: 2,
+    },
+    groupCardDivider: {
+      height: 1,
+      backgroundColor: isDark ? '#1E1E1E' : '#F1F5F9',
+      marginVertical: 12,
+    },
+    groupCardBottom: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    groupStatusText: {
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: isDark ? '#F9AB55' : colors.navyPrimary,
+    },
+    groupActionText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? '#F58A07' : colors.bluePrimary,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+      justifyContent: 'flex-end',
+    },
+    modalSheet: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      borderTopWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      paddingTop: 20,
+      maxHeight: '80%',
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 22,
+      paddingBottom: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#F1F5F9',
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    groupDetailsSub: {
+      fontSize: 12,
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginTop: 2,
+    },
+    tabBarRow: {
+      flexDirection: 'row',
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      backgroundColor: isDark ? '#000000' : '#F8FAFC',
+    },
+    tabBarBtn: {
+      flex: 1,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    tabBarBtnActive: {
+      borderBottomWidth: 2.5,
+      borderBottomColor: isDark ? '#F58A07' : colors.bluePrimary,
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+    },
+    tabBarBtnText: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      color: isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B',
+    },
+    tabBarBtnTextActive: {
+      color: isDark ? '#F58A07' : colors.bluePrimary,
+      fontWeight: '800',
+    },
+    modalBody: {
+      padding: 22,
+    },
+    inputLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    textInput: {
+      backgroundColor: isDark ? '#000000' : '#F8FAFC',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 14,
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    modalActionBtn: {
+      backgroundColor: colors.bluePrimary,
+      borderRadius: 16,
+      paddingVertical: 14,
+      alignItems: 'center',
+      marginTop: 20,
+      shadowColor: colors.bluePrimary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    modalActionBtnText: {
+      fontSize: 14.5,
+      fontWeight: '700',
+      color: isDark ? '#000000' : '#FFFFFF',
+    },
+    detailsScroll: {
+      padding: 22,
+    },
+    groupKpiBar: {
+      flexDirection: 'row',
+      backgroundColor: isDark ? '#000000' : '#F8FAFC',
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+    },
+    groupKpiItem: {
+      flex: 1,
+      alignItems: 'center',
+    },
+    groupKpiLabel: {
+      fontSize: 11,
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginBottom: 4,
+    },
+    groupKpiValue: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    actionBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: isDark ? '#000000' : colors.blueBadge,
+      borderRadius: 14,
+      padding: 12,
+      marginBottom: 18,
+      borderWidth: 1,
+      borderColor: isDark ? '#F58A07' : 'rgba(144, 210, 245, 0.3)',
+    },
+    actionBannerText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: isDark ? '#F9AB55' : colors.navyPrimary,
+      flex: 1,
+      marginRight: 8,
+    },
+    bannerBtn: {
+      backgroundColor: colors.bluePrimary,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 10,
+    },
+    bannerBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? '#000000' : '#FFFFFF',
+    },
+    expenseFeed: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      marginBottom: 16,
+    },
+    expenseItemRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
+    },
+    expenseDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.bluePrimary,
+      marginRight: 10,
+    },
+    settlementIconSmall: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: isDark ? '#000000' : '#EFF6FF',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    memberAvatarCircle: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: isDark ? '#000000' : colors.navyPrimary,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    memberAvatarInitial: {
+      color: '#FFFFFF',
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    youBadge: {
+      backgroundColor: isDark ? 'rgba(245, 138, 7, 0.2)' : '#EFF6FF',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 8,
+    },
+    youBadgeText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: isDark ? '#F58A07' : colors.bluePrimary,
+    },
+    emptyStateBox: {
+      padding: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: isDark ? '#000000' : '#F8FAFC',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      borderRadius: 14,
+      marginBottom: 14,
+    },
+    emptyStateText: {
+      fontSize: 13,
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+    },
+    expenseMain: {
+      flex: 1,
+    },
+    expenseItemTitle: {
+      fontSize: 13.5,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    expenseItemPayer: {
+      fontSize: 11.5,
+      color: isDark ? '#A1A1AA' : '#64748B',
+      marginTop: 1,
+    },
+    expenseItemAmount: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : colors.textPrimary,
+    },
+    addGroupExpenseBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.bluePrimary,
+      borderRadius: 16,
+      paddingVertical: 14,
+      gap: 8,
+      shadowColor: colors.bluePrimary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    addGroupExpenseBtnText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    bottomSpacer: {
+      height: 100,
+    },
+  });

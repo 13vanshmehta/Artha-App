@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { colors } from '../../theme/colors';
+import { useTheme } from '../../context/ThemeContext';
 
 export type TabKey = 'Home' | 'PE Tracker' | 'Groups' | 'Account';
 
@@ -227,6 +228,7 @@ const AccountAvatar: React.FC<{
   userName?: string | null;
   size?: number;
 }> = ({ isActive, userAvatarUrl, userName, size = 22 }) => {
+  const { isDark } = useTheme();
   const initial = (userName?.trim()?.[0] || 'A').toUpperCase();
 
   return (
@@ -237,7 +239,7 @@ const AccountAvatar: React.FC<{
           width: size + 4,
           height: size + 4,
           borderRadius: (size + 4) / 2,
-          borderColor: isActive ? colors.navyDeep : 'transparent',
+          borderColor: isActive ? (isDark ? '#FFFFFF' : colors.navyDeep) : 'transparent',
           borderWidth: isActive ? 2 : 0,
         },
       ]}
@@ -263,7 +265,9 @@ const AccountAvatar: React.FC<{
               width: size,
               height: size,
               borderRadius: size / 2,
-              backgroundColor: isActive ? colors.navyDeep : '#E2E8F0',
+              backgroundColor: isActive
+                ? (isDark ? '#FFFFFF' : colors.navyDeep)
+                : (isDark ? '#262626' : '#E2E8F0'),
             },
           ]}
         >
@@ -271,7 +275,9 @@ const AccountAvatar: React.FC<{
             style={[
               styles.avatarInitial,
               {
-                color: isActive ? '#FFFFFF' : '#475569',
+                color: isActive
+                  ? (isDark ? '#000000' : '#FFFFFF')
+                  : (isDark ? '#A1A1AA' : '#475569'),
                 fontSize: size * 0.44,
               },
             ]}
@@ -343,6 +349,7 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
+  const { isDark } = useTheme();
 
   // Floating margin above device home indicator / safe area
   const bottomMargin = Math.max(
@@ -387,15 +394,20 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
   // is a continuous interpolation that tracks the finger/scroll position in
   // real time (1 when that tab's page is centered, fading linearly as the
   // adjacent page is dragged into view). Otherwise falls back to the spring.
-  const getTabAnim = (tabKey: TabKey, index: number): Animated.Value => {
-    if (scrollProgress) {
-      // AnimatedInterpolation exposes the same chainable .interpolate() API
-      // we use below, so it's safe to treat as an Animated.Value here.
-      return scrollProgress.interpolate({
+  const tabInterpolations = React.useMemo(() => {
+    if (!scrollProgress) return null;
+    return TABS.map((_, index) =>
+      scrollProgress.interpolate({
         inputRange: [index - 1, index, index + 1],
         outputRange: [0, 1, 0],
         extrapolate: 'clamp',
-      }) as unknown as Animated.Value;
+      }),
+    );
+  }, [scrollProgress]);
+
+  const getTabAnim = (tabKey: TabKey, index: number): Animated.Value => {
+    if (tabInterpolations) {
+      return tabInterpolations[index] as unknown as Animated.Value;
     }
     return tabAnims[tabKey];
   };
@@ -447,7 +459,16 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
         },
       ]}
     >
-      <View style={[styles.capsuleContainer, { width: capsuleWidth }]}>
+      <View
+        style={[
+          styles.capsuleContainer,
+          {
+            width: capsuleWidth,
+            backgroundColor: isDark ? 'rgba(0, 0, 0, 0.96)' : 'rgba(255, 255, 255, 0.94)',
+            borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.85)',
+          },
+        ]}
+      >
         {TABS.map((tab, index) => {
           const isActive = currentTab === tab.key;
           const anim = getTabAnim(tab.key, index);
@@ -486,13 +507,17 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
           // Active pill background color highlight
           const animatedBgColor = anim.interpolate({
             inputRange: [0, 1],
-            outputRange: ['rgba(3, 29, 68, 0)', 'rgba(3, 29, 68, 0.08)'],
+            outputRange: isDark
+              ? ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.12)']
+              : ['rgba(3, 29, 68, 0)', 'rgba(3, 29, 68, 0.08)'],
           });
 
           // Active pill subtle border
           const animatedBorderColor = anim.interpolate({
             inputRange: [0, 1],
-            outputRange: ['rgba(3, 29, 68, 0)', 'rgba(3, 29, 68, 0.05)'],
+            outputRange: isDark
+              ? ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.16)']
+              : ['rgba(3, 29, 68, 0)', 'rgba(3, 29, 68, 0.05)'],
           });
 
           return (
@@ -518,7 +543,11 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
                 {/* 1. Icon (Always visible) */}
                 <TabIcon
                   tab={tab.key}
-                  color={isActive ? colors.navyDeep : '#64748B'}
+                  color={
+                    isActive
+                      ? (isDark ? '#FFFFFF' : colors.navyDeep)
+                      : (isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B')
+                  }
                   size={22}
                   isActive={isActive}
                   userAvatarUrl={userAvatarUrl}
@@ -548,7 +577,7 @@ const BottomTabBarComponent: React.FC<BottomTabBarProps> = ({
                         styles.tabLabel,
                         {
                           width: maxLabelWidth,
-                          color: colors.navyDeep,
+                          color: isDark ? '#FFFFFF' : colors.navyDeep,
                         },
                       ]}
                     >

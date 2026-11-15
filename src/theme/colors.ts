@@ -93,6 +93,22 @@ export const arcticAuroraColors = {
   glassDark: 'rgba(1, 29, 40, 0.88)',
   glassNavy: 'rgba(5, 63, 86, 0.88)',
   overlay: 'rgba(1, 29, 40, 0.72)',
+
+  // Semantic Role Tokens
+  surface: '#FFFFFF',
+  surfaceElevated: '#FFFFFF',
+  surfacePressed: 'rgba(0, 0, 0, 0.04)',
+  border: '#E2E8F0',
+  borderHairline: '#E8ECF2',
+  borderFocus: '#21A5EC',
+  accent: '#21A5EC',
+  accentSecondary: '#90D2F5',
+  onAccent: '#FFFFFF',
+  card: '#FFFFFF',
+  cardBorder: '#E2E8F0',
+  heroBackground: '#053F56',
+  heroBorder: 'transparent',
+  modalBackdrop: 'rgba(1, 29, 40, 0.72)',
 };
 
 // -------------------------------------------------------------
@@ -178,10 +194,126 @@ export const sunsetNavyColors: typeof arcticAuroraColors = {
   glassDark: 'rgba(3, 29, 68, 0.88)',
   glassNavy: 'rgba(8, 72, 135, 0.88)',
   overlay: 'rgba(3, 29, 68, 0.72)',
+
+  // Semantic Role Tokens
+  surface: '#FFFFFF',
+  surfaceElevated: '#FFFFFF',
+  surfacePressed: 'rgba(0, 0, 0, 0.04)',
+  border: '#E2E8F0',
+  borderHairline: '#EAE7F2',
+  borderFocus: '#F58A07',
+  accent: '#F58A07',
+  accentSecondary: '#F9AB55',
+  onAccent: '#FFFFFF',
+  card: '#FFFFFF',
+  cardBorder: '#E2E8F0',
+  heroBackground: '#084887',
+  heroBorder: 'transparent',
+  modalBackdrop: 'rgba(3, 29, 68, 0.72)',
 };
 
 // -------------------------------------------------------------
-// 3. MASTER SWITCH: Toggle between 'sunsetNavy' and 'arcticAurora'
+// 3. TRUE OLED PITCH-BLACK PALETTE
+// -------------------------------------------------------------
+export const oledDarkColors: typeof sunsetNavyColors = {
+  // Primary Palette Swatches
+  blueAurora: '#F58A07',        // Vibrant Tangerine Accent
+  blueGlacial: '#F9AB55',       // Soft Golden Peach
+  greenFjord: '#F9AB55',        // Warm Amber/Peach secondary (no blue)
+  midnight: '#000000',          // True Pitch Black canvas
+  midnightCard: '#000000',      // True Pitch Black surface
+  midnightSubtle: '#000000',    // True Pitch Black surface
+  white: '#FFFFFF',             // Crisp White
+  grayBg: '#000000',            // True Pitch Black Canvas
+  grayLight: 'rgba(255, 255, 255, 0.14)', // Subtle border
+  grayMuted: 'rgba(255, 255, 255, 0.64)', // Secondary text
+
+  // Backgrounds
+  background: '#000000',        // True Pitch Black
+  backgroundSecondary: '#000000',
+  surfacePaleBlue: '#000000',   // Pure Black container with border
+  backgroundSubtle: '#000000',
+
+  // Deep Obsidian & Dark surfaces
+  navyDeep: '#000000',
+  navyPrimary: '#F9AB55',       // Warm amber (no blue cast)
+  navySecondary: '#F58A07',
+  navyCard: '#000000',          // Pure Black Card with 1px border
+  navyCardDark: '#000000',      // Pure Black Inset
+
+  // Vibrant Accents
+  bluePrimary: '#F58A07',       // Vibrant Tangerine CTA
+  blueBright: '#FF9B26',
+  blueLight: '#F9AB55',
+  bluePale: '#1A1005',
+  blueSoftCard: '#000000',
+  blueBadge: 'rgba(245, 138, 7, 0.18)',
+
+  // Dual tone & Hero Card
+  cardTopNavy: '#000000',
+  cardBottomBlue: '#000000',
+  cardBottomBlueLight: '#F58A07',
+
+  // Gradients
+  heroGradientStart: '#000000',
+  heroGradientEnd: '#000000',
+
+  // Typography (Pure white opacities - no blue or gray tint)
+  textPrimary: '#FFFFFF',
+  textSecondary: 'rgba(255, 255, 255, 0.64)',
+  textMuted: 'rgba(255, 255, 255, 0.42)',
+  textLight: '#FFFFFF',
+  textLightMuted: 'rgba(255, 255, 255, 0.64)',
+  textLightSubtle: 'rgba(255, 255, 255, 0.42)',
+
+  // Functional / Status
+  positive: '#22C55E',
+  positiveBg: 'rgba(34, 197, 94, 0.16)',
+  negative: '#EF4444',
+  negativeBg: 'rgba(239, 68, 68, 0.16)',
+  warning: '#F58A07',
+  warningBg: 'rgba(245, 138, 7, 0.16)',
+
+  // Auth & Input Surfaces (Pure black with 1px border)
+  inputSurface: '#000000',
+  inputSurfaceFocused: '#000000',
+  inputBorder: 'rgba(255, 255, 255, 0.14)',
+  inputBorderFocused: '#F58A07',
+  inputBorderError: '#EF4444',
+
+  // Glass & Frosted Surfaces
+  borderLight: 'rgba(255, 255, 255, 0.14)',
+  borderNavy: 'rgba(255, 255, 255, 0.14)',
+  borderBlue: 'rgba(245, 138, 7, 0.4)',
+  borderSpecular: 'rgba(255, 255, 255, 0.14)',
+  liquidGlassCard: '#000000',
+  liquidGlassCardSubtle: '#000000',
+  liquidGlassPill: 'rgba(255, 255, 255, 0.08)',
+  liquidGlassNavy: '#000000',
+  liquidGlassGlow: 'rgba(245, 138, 7, 0.25)',
+  glassDark: '#000000',
+  glassNavy: '#000000',
+  overlay: 'rgba(0, 0, 0, 0.6)',
+
+  // Semantic Role Tokens
+  surface: '#000000',
+  surfaceElevated: '#000000',
+  surfacePressed: 'rgba(255, 255, 255, 0.08)',
+  border: 'rgba(255, 255, 255, 0.14)',
+  borderHairline: 'rgba(255, 255, 255, 0.14)',
+  borderFocus: '#F58A07',
+  accent: '#F58A07',
+  accentSecondary: '#F9AB55',
+  onAccent: '#000000',
+  card: '#000000',
+  cardBorder: 'rgba(255, 255, 255, 0.14)',
+  heroBackground: '#000000',
+  heroBorder: 'rgba(245, 138, 7, 0.5)',
+  modalBackdrop: 'rgba(0, 0, 0, 0.6)',
+};
+
+// -------------------------------------------------------------
+// 4. MASTER SWITCH: Toggle between 'sunsetNavy' and 'arcticAurora'
 // -------------------------------------------------------------
 export const ACTIVE_THEME: ThemePaletteName = 'sunsetNavy';
 
@@ -194,3 +326,6 @@ export const PALETTES: Record<ThemePaletteName, typeof arcticAuroraColors> = {
  * The active colors object used across the application.
  */
 export const colors = PALETTES[ACTIVE_THEME];
+
+export type ThemeColors = typeof sunsetNavyColors;
+export type Palette = ThemeColors;

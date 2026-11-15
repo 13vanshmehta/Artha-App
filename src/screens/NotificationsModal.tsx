@@ -11,7 +11,9 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors } from '../theme/colors';
+import { Palette } from '../theme/colors';
+import { useThemedStyles } from '../theme/useThemedStyles';
+import { useTheme } from '../context/ThemeContext';
 import { AppIcon, AppIconName } from '../components/icons/AppIcon';
 import { toast } from '../context/ToastContext';
 
@@ -106,8 +108,8 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
     dateGroup: 'Earlier this week',
     read: true,
     iconName: 'Shield',
-    iconColor: colors.navyPrimary,
-    iconBg: colors.liquidGlassPill,
+    iconColor: '#084887',
+    iconBg: '#E0F2FE',
   },
 ];
 
@@ -130,6 +132,8 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onMarkAllAsRead,
   onClearAll,
 }) => {
+  const { isDark, colors: c } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
   const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
@@ -243,7 +247,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             accessibilityLabel="Go Back"
             accessibilityRole="button"
           >
-            <AppIcon name="ChevronLeft" size={26} color="#0F172A" strokeWidth={2.2} />
+            <AppIcon name="ChevronLeft" size={26} color={c.textPrimary} strokeWidth={2.2} />
           </TouchableOpacity>
 
           <Text style={styles.headerTitle}>Notifications</Text>
@@ -337,7 +341,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                             <View
                               style={[
                                 styles.iconBox,
-                                { backgroundColor: item.iconBg },
+                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : item.iconBg },
                               ]}
                             >
                               <AppIcon
@@ -396,167 +400,171 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  backBtn: {
-    padding: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0F172A',
-    letterSpacing: -0.3,
-  },
-  clearAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.75)',
-    borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.90)',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  clearAllBtnDisabled: {
-    opacity: 0.45,
-    backgroundColor: 'rgba(241, 245, 249, 0.60)',
-    borderColor: 'rgba(226, 232, 240, 0.50)',
-  },
-  clearAllBtnText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: '#EF4444',
-    letterSpacing: -0.2,
-  },
-  clearAllBtnTextDisabled: {
-    color: '#94A3B8',
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-  },
-  groupSection: {
-    marginTop: 20,
-  },
-  groupHeader: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748B',
-    marginBottom: 10,
-    letterSpacing: 0.1,
-  },
-  groupList: {
-    backgroundColor: '#FFFFFF',
-  },
-  notificationRowWrapper: {
-    borderRadius: 12,
-    marginVertical: 2,
-  },
-  rowWrapperActive: {
-    backgroundColor: '#F8FAFC',
-  },
-  notificationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F8FAFC',
-  },
-  notificationRowUnread: {
-    backgroundColor: '#F8FAFC',
-  },
-  iconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    marginTop: 2,
-  },
-  contentBox: {
-    flex: 1,
-    marginRight: 8,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 3,
-  },
-  itemTitle: {
-    fontSize: 13.5,
-    fontWeight: '500',
-    color: '#334155',
-    flex: 1,
-    marginRight: 8,
-    lineHeight: 18,
-  },
-  itemTitleUnread: {
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  timestampText: {
-    fontSize: 11,
-    color: '#94A3B8',
-    fontWeight: '500',
-  },
-  itemMessage: {
-    fontSize: 12,
-    color: '#64748B',
-    lineHeight: 16,
-  },
-  deleteBtn: {
-    padding: 6,
-    marginTop: 2,
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  emptyIconCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 13.5,
-    color: '#64748B',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: c.border,
+      backgroundColor: c.background,
+    },
+    backBtn: {
+      padding: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: c.textPrimary,
+      letterSpacing: -0.3,
+    },
+    clearAllBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+      borderRadius: 16,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+      shadowColor: isDark ? 'transparent' : '#000000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.06,
+      shadowRadius: 4,
+      elevation: isDark ? 0 : 2,
+    },
+    clearAllBtnDisabled: {
+      opacity: 0.45,
+      backgroundColor: isDark ? '#000000' : 'rgba(241, 245, 249, 0.60)',
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(226, 232, 240, 0.50)',
+    },
+    clearAllBtnText: {
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: '#EF4444',
+      letterSpacing: -0.2,
+    },
+    clearAllBtnTextDisabled: {
+      color: c.textMuted,
+    },
+    listContent: {
+      paddingHorizontal: 16,
+      paddingBottom: 40,
+    },
+    groupSection: {
+      marginTop: 20,
+    },
+    groupHeader: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.textSecondary,
+      marginBottom: 10,
+      letterSpacing: 0.1,
+    },
+    groupList: {
+      backgroundColor: c.background,
+    },
+    notificationRowWrapper: {
+      borderRadius: 12,
+      marginVertical: 2,
+    },
+    rowWrapperActive: {
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F8FAFC',
+    },
+    notificationRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      paddingVertical: 12,
+      paddingHorizontal: 8,
+      borderRadius: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F8FAFC',
+    },
+    notificationRowUnread: {
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : '#F8FAFC',
+    },
+    iconBox: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+      marginTop: 2,
+    },
+    contentBox: {
+      flex: 1,
+      marginRight: 8,
+    },
+    titleRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: 3,
+    },
+    itemTitle: {
+      fontSize: 13.5,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#334155',
+      flex: 1,
+      marginRight: 8,
+      lineHeight: 18,
+    },
+    itemTitleUnread: {
+      fontWeight: '700',
+      color: c.textPrimary,
+    },
+    timestampText: {
+      fontSize: 11,
+      color: c.textMuted,
+      fontWeight: '500',
+    },
+    itemMessage: {
+      fontSize: 12,
+      color: c.textSecondary,
+      lineHeight: 16,
+    },
+    deleteBtn: {
+      padding: 6,
+      marginTop: 2,
+    },
+    emptyContainer: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 32,
+    },
+    emptyIconCircle: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 16,
+    },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: c.textPrimary,
+      marginBottom: 8,
+    },
+    emptySubtitle: {
+      fontSize: 13.5,
+      color: c.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+  });

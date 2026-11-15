@@ -16,6 +16,7 @@ import { ExpenseItem } from '../data/mockData';
 import { colors } from '../theme/colors';
 import { toast } from '../context/ToastContext';
 import { alert } from '../context/AlertContext';
+import { useTheme } from '../context/ThemeContext';
 
 interface TrackerScreenProps {
   expenses: ExpenseItem[];
@@ -46,6 +47,8 @@ export const TrackerScreen: React.FC<TrackerScreenProps> = ({
   onEditTransaction,
   onDeleteTransaction,
 }) => {
+  const { isDark, colors: themeColors } = useTheme();
+  const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
@@ -234,7 +237,7 @@ export const TrackerScreen: React.FC<TrackerScreenProps> = ({
 
           <View style={styles.summaryColumn}>
             <Text style={styles.summaryLabel}>Total Expenses</Text>
-            <Text style={[styles.summaryValue, { color: '#0F172A' }]}>
+            <Text style={[styles.summaryValue, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
               -₹{totalExpenses.toLocaleString('en-IN')}
             </Text>
           </View>
@@ -345,7 +348,7 @@ export const TrackerScreen: React.FC<TrackerScreenProps> = ({
                 <Text style={styles.dateGroupTitle}>{group.title}</Text>
 
                 {group.data.map((item, idx) => {
-                  const catConfig = getCategoryIconConfig(item.category);
+                  const catConfig = getCategoryIconConfig(item.category, isDark);
                   const isIncome = item.type === 'income';
 
                   return (
@@ -412,254 +415,257 @@ export const TrackerScreen: React.FC<TrackerScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#F2F3F7',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 40,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  headerCaption: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    letterSpacing: 1.1,
-    marginBottom: 3,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: -0.6,
-  },
-  monthPill: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  monthPillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.textSecondary,
-  },
-  summaryCard: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 16,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  summaryColumn: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  summaryLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#64748B',
-    marginBottom: 4,
-  },
-  summaryValue: {
-    fontSize: 14.5,
-    fontWeight: '800',
-  },
-  summaryDivider: {
-    width: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 4,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-  searchBar: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 13,
-    color: '#0F172A',
-  },
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bluePrimary,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    gap: 6,
-  },
-  addBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  filtersScroll: {
-    gap: 8,
-    paddingBottom: 16,
-  },
-  filterPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  filterPillSelected: {
-    backgroundColor: colors.navyPrimary,
-    borderColor: colors.navyPrimary,
-  },
-  filterText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  filterTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  groupsContainer: {
-    gap: 14,
-  },
-  dateGroupCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    elevation: 1,
-  },
-  dateGroupTitle: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: '#64748B',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  transactionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  catIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  txMain: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  txMerchant: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  txMeta: {
-    fontSize: 11.5,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  txRight: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  txAmount: {
-    fontSize: 14.5,
-    fontWeight: '800',
-  },
-  txAmountIncome: {
-    color: '#16A34A',
-  },
-  txAmountExpense: {
-    color: '#0F172A',
-  },
-  trashBtn: {
-    padding: 2,
-  },
-  emptyContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 32,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginTop: 10,
-  },
-  emptyIconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 6,
-  },
-  emptySub: {
-    fontSize: 13,
-    color: '#64748B',
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  emptyActionBtn: {
-    backgroundColor: colors.bluePrimary,
-    paddingHorizontal: 22,
-    paddingVertical: 11,
-    borderRadius: 16,
-  },
-  emptyActionBtnText: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  bottomSpacer: {
-    height: 100,
-  },
-});
+const createStyles = (themeColors: typeof colors, isDark: boolean) =>
+  StyleSheet.create({
+    screen: {
+      flex: 1,
+      backgroundColor: isDark ? '#000000' : '#F2F3F7',
+    },
+    scrollContent: {
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 40,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 16,
+    },
+    headerCaption: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: isDark ? '#A1A1AA' : colors.textSecondary,
+      letterSpacing: 1.1,
+      marginBottom: 3,
+    },
+    headerTitle: {
+      fontSize: 28,
+      fontWeight: '900',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      letterSpacing: -0.6,
+    },
+    monthPill: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      borderRadius: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    monthPillText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : colors.textSecondary,
+    },
+    summaryCard: {
+      flexDirection: 'row',
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 20,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      marginBottom: 16,
+      shadowColor: '#0F172A',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.04,
+      shadowRadius: 6,
+      elevation: isDark ? 0 : 2,
+    },
+    summaryColumn: {
+      flex: 1,
+      alignItems: 'center',
+    },
+    summaryLabel: {
+      fontSize: 11,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginBottom: 4,
+    },
+    summaryValue: {
+      fontSize: 14.5,
+      fontWeight: '800',
+    },
+    summaryDivider: {
+      width: 1,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#F1F5F9',
+      marginVertical: 4,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginBottom: 12,
+    },
+    searchBar: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      gap: 8,
+    },
+    searchInput: {
+      flex: 1,
+      paddingVertical: 10,
+      fontSize: 13,
+      color: isDark ? '#FFFFFF' : '#0F172A',
+    },
+    addBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.bluePrimary,
+      paddingHorizontal: 16,
+      borderRadius: 16,
+      gap: 6,
+    },
+    addBtnText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: isDark ? '#000000' : '#FFFFFF',
+    },
+    filtersScroll: {
+      gap: 8,
+      paddingBottom: 16,
+    },
+    filterPill: {
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 14,
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+    },
+    filterPillSelected: {
+      backgroundColor: isDark ? '#F58A07' : colors.navyPrimary,
+      borderColor: isDark ? '#F58A07' : colors.navyPrimary,
+    },
+    filterText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+    },
+    filterTextSelected: {
+      color: isDark ? '#000000' : '#FFFFFF',
+      fontWeight: '700',
+    },
+    groupsContainer: {
+      gap: 14,
+    },
+    dateGroupCard: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 20,
+      paddingHorizontal: 16,
+      paddingTop: 14,
+      paddingBottom: 6,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      shadowColor: '#0F172A',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.03,
+      shadowRadius: 6,
+      elevation: isDark ? 0 : 1,
+    },
+    dateGroupTitle: {
+      fontSize: 12.5,
+      fontWeight: '700',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    transactionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
+    },
+    catIconCircle: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    txMain: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    txMerchant: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+    },
+    txMeta: {
+      fontSize: 11.5,
+      color: isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B',
+      marginTop: 2,
+    },
+    txRight: {
+      alignItems: 'flex-end',
+      gap: 4,
+    },
+    txAmount: {
+      fontSize: 14.5,
+      fontWeight: '800',
+    },
+    txAmountIncome: {
+      color: '#16A34A',
+    },
+    txAmountExpense: {
+      color: isDark ? '#FFFFFF' : '#0F172A',
+    },
+    trashBtn: {
+      padding: 2,
+    },
+    emptyContainer: {
+      backgroundColor: isDark ? '#000000' : '#FFFFFF',
+      borderRadius: 20,
+      padding: 32,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      marginTop: 10,
+    },
+    emptyIconCircle: {
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      backgroundColor: isDark ? '#000000' : '#F1F5F9',
+      borderWidth: isDark ? 1 : 0,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 16,
+    },
+    emptyTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      marginBottom: 6,
+    },
+    emptySub: {
+      fontSize: 13,
+      color: isDark ? '#A1A1AA' : '#64748B',
+      textAlign: 'center',
+      lineHeight: 18,
+      marginBottom: 20,
+    },
+    emptyActionBtn: {
+      backgroundColor: colors.bluePrimary,
+      paddingHorizontal: 22,
+      paddingVertical: 11,
+      borderRadius: 16,
+    },
+    emptyActionBtnText: {
+      fontSize: 13.5,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    bottomSpacer: {
+      height: 100,
+    },
+  });

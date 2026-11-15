@@ -22,7 +22,9 @@ import {
   ToastType,
   toastManager,
 } from '../../context/ToastContext';
-import { colors } from '../../theme/colors';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 
 interface ToastThemeVisuals {
@@ -64,6 +66,8 @@ export const ToastCard: React.FC<ToastCardProps> = ({
   onDismiss,
   onExited,
 }) => {
+  const { isDark } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const visuals = TOAST_VISUALS[item.type];
   const entranceAnim = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
@@ -157,7 +161,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({
           ]}
           testID={`toast-icon-${item.type}`}
         >
-          <Icon name={visuals.iconName} size={17} color={colors.white} />
+          <Icon name={visuals.iconName} size={17} color="#FFFFFF" />
         </View>
 
         {/* Center text block */}
@@ -208,7 +212,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({
           accessibilityLabel={`Dismiss ${item.title || item.type} notification`}
           testID={`toast-close-${item.id}`}
         >
-          <Icon name="close" size={14} color="#64748B" />
+          <Icon name="close" size={14} color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'} />
         </TouchableOpacity>
       </View>
 
@@ -230,6 +234,7 @@ export const ToastCard: React.FC<ToastCardProps> = ({
 };
 
 export const ToastHost: React.FC = () => {
+  const styles = useThemedStyles(makeStyles);
   const insets = useContext(SafeAreaInsetsContext) ?? {
     top: 0,
     bottom: 0,
@@ -280,90 +285,91 @@ export const ToastHost: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  hostContainer: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    zIndex: 100000,
-    elevation: 1000,
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: colors.white,
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.08)',
-    shadowColor: '#01151E',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  cardBody: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 14,
-    paddingRight: 8,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  statusCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  textColumn: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  titleText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1E293B',
-    lineHeight: 19,
-  },
-  messageText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#475569',
-    lineHeight: 18,
-    marginTop: 1,
-  },
-  closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 7,
-    marginTop: 6,
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  progressTrack: {
-    height: 3,
-    backgroundColor: '#E2E8F0',
-    width: '100%',
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    hostContainer: {
+      position: 'absolute',
+      left: spacing.lg,
+      right: spacing.lg,
+      zIndex: 100000,
+      elevation: 1000,
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 440,
+      backgroundColor: isDark ? '#000000' : c.white,
+      borderRadius: 14,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.08)',
+      shadowColor: isDark ? 'transparent' : '#01151E',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: isDark ? 0 : 0.12,
+      shadowRadius: 16,
+      elevation: isDark ? 0 : 8,
+    },
+    cardBody: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingLeft: 14,
+      paddingRight: 8,
+      paddingVertical: 12,
+      gap: 12,
+    },
+    statusCircle: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    textColumn: {
+      flex: 1,
+      justifyContent: 'center',
+    },
+    titleText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: isDark ? '#FFFFFF' : '#1E293B',
+      lineHeight: 19,
+    },
+    messageText: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#475569',
+      lineHeight: 18,
+      marginTop: 1,
+    },
+    closeButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionButton: {
+      alignSelf: 'flex-start',
+      backgroundColor: isDark ? '#F58A07' : '#0F172A',
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 7,
+      marginTop: 6,
+    },
+    actionButtonText: {
+      color: isDark ? '#000000' : '#FFFFFF',
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.3,
+    },
+    progressTrack: {
+      height: 3,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+      width: '100%',
+      overflow: 'hidden',
+    },
+    progressBarFill: {
+      height: '100%',
+    },
+  });

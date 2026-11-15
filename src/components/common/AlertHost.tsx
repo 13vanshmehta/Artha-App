@@ -11,8 +11,13 @@ import {
 } from 'react-native';
 import { useAlert, ActiveAlert } from '../../context/AlertContext';
 import { AppIcon, AppIconName } from '../icons/AppIcon';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 
 export const AlertHost: React.FC = () => {
+  const { isDark } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { activeAlert, dismiss } = useAlert();
 
   const [visible, setVisible] = useState(false);
@@ -86,7 +91,7 @@ export const AlertHost: React.FC = () => {
     current.icon || (isDanger ? 'Trash2' : isWarning ? 'CircleAlert' : isSuccess ? 'Check' : 'Bell');
   let iconColor = isDanger ? '#EF4444' : isWarning ? '#F59E0B' : isSuccess ? '#10B981' : '#F59E0B';
   if (current.icon && !isDanger && !isWarning && !isSuccess) {
-    iconColor = '#0F172A';
+    iconColor = isDark ? '#FFFFFF' : '#0F172A';
   }
 
   const handleConfirm = async () => {
@@ -216,126 +221,131 @@ export const AlertHost: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(15, 23, 42, 0.62)',
-  },
-  card: {
-    width: 310,
-    maxWidth: '92%',
-    backgroundColor: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: 28,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.95)',
-    paddingTop: 26,
-    paddingBottom: 22,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.20,
-    shadowRadius: 36,
-    elevation: 20,
-  },
-  iconRing: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    backgroundColor: 'rgba(255, 255, 255, 0.65)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  bellBadge: {
-    position: 'absolute',
-    top: 13,
-    right: 14,
-    width: 17,
-    height: 17,
-    borderRadius: 8.5,
-    backgroundColor: '#EF4444',
-    borderWidth: 1.5,
-    borderColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bellBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 9.5,
-    fontWeight: '800',
-    lineHeight: 12,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-    textAlign: 'center',
-    letterSpacing: -0.4,
-    marginBottom: 6,
-  },
-  message: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#334155',
-    textAlign: 'center',
-    lineHeight: 21,
-    marginBottom: 24,
-    paddingHorizontal: 6,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%',
-    alignItems: 'center',
-  },
-  pillButton: {
-    flex: 1,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.65)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  cancelBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#EA580C',
-    letterSpacing: -0.2,
-  },
-  confirmBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#2563EB',
-    letterSpacing: -0.2,
-  },
-  confirmBtnTextDanger: {
-    color: '#DC2626',
-  },
-  confirmBtnTextWarning: {
-    color: '#D97706',
-  },
-  confirmBtnTextSuccess: {
-    color: '#16A34A',
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 24,
+    },
+    backdrop: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: isDark ? 'rgba(0, 0, 0, 0.6)' : 'rgba(15, 23, 42, 0.62)',
+    },
+    card: {
+      width: 310,
+      maxWidth: '92%',
+      backgroundColor: isDark ? '#000000' : 'rgba(255, 255, 255, 0.88)',
+      borderRadius: 28,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.95)',
+      paddingTop: 26,
+      paddingBottom: 22,
+      paddingHorizontal: 20,
+      alignItems: 'center',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 16 },
+      shadowOpacity: isDark ? 0 : 0.2,
+      shadowRadius: 36,
+      elevation: isDark ? 0 : 20,
+    },
+    iconRing: {
+      width: 74,
+      height: 74,
+      borderRadius: 37,
+      backgroundColor: isDark ? '#000000' : 'rgba(255, 255, 255, 0.65)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.95)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 16,
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0 : 0.08,
+      shadowRadius: 10,
+      elevation: isDark ? 0 : 3,
+    },
+    bellBadge: {
+      position: 'absolute',
+      top: 13,
+      right: 14,
+      width: 17,
+      height: 17,
+      borderRadius: 8.5,
+      backgroundColor: '#EF4444',
+      borderWidth: 1.5,
+      borderColor: isDark ? '#000000' : '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    bellBadgeText: {
+      color: '#FFFFFF',
+      fontSize: 9.5,
+      fontWeight: '800',
+      lineHeight: 12,
+    },
+    title: {
+      fontSize: 22,
+      fontWeight: '800',
+      color: isDark ? '#FFFFFF' : '#0F172A',
+      textAlign: 'center',
+      letterSpacing: -0.4,
+      marginBottom: 6,
+    },
+    message: {
+      fontSize: 15,
+      fontWeight: '500',
+      color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#334155',
+      textAlign: 'center',
+      lineHeight: 21,
+      marginBottom: 24,
+      paddingHorizontal: 6,
+    },
+    actionsRow: {
+      flexDirection: 'row',
+      gap: 12,
+      width: '100%',
+      alignItems: 'center',
+    },
+    pillButton: {
+      flex: 1,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: isDark ? '#000000' : 'rgba(255, 255, 255, 0.65)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(255, 255, 255, 0.95)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0 : 0.06,
+      shadowRadius: 6,
+      elevation: isDark ? 0 : 2,
+    },
+    cancelBtnText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: isDark ? '#F58A07' : '#EA580C',
+      letterSpacing: -0.2,
+    },
+    confirmBtnText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: isDark ? '#F9AB55' : '#2563EB',
+      letterSpacing: -0.2,
+    },
+    confirmBtnTextDanger: {
+      color: '#EF4444',
+    },
+    confirmBtnTextWarning: {
+      color: '#F59E0B',
+    },
+    confirmBtnTextSuccess: {
+      color: '#10B981',
+    },
+  });

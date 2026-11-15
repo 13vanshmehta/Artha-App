@@ -11,9 +11,11 @@ import {
   Platform,
 } from 'react-native';
 import { AppIcon } from '../icons/AppIcon';
-import { CATEGORY_ICON_REGISTRY } from '../icons/categoryIcons';
+import { CATEGORY_ICON_REGISTRY, getCategoryIconConfig } from '../icons/categoryIcons';
 import { ExpenseItem } from '../../data/mockData';
-import { colors } from '../../theme/colors';
+import { useTheme } from '../../context/ThemeContext';
+import { useThemedStyles } from '../../theme/useThemedStyles';
+import { Palette } from '../../theme/colors';
 import { toast } from '../../context/ToastContext';
 import { alert } from '../../context/AlertContext';
 
@@ -68,6 +70,8 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   initialData,
   defaultType = 'expense',
 }) => {
+  const { isDark, colors: themeColors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [type, setType] = useState<'expense' | 'income'>(defaultType);
   const [amount, setAmount] = useState('');
   const [merchant, setMerchant] = useState('');
@@ -188,7 +192,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               onPress={onClose}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <AppIcon name="X" size={20} color="#64748B" />
+              <AppIcon
+                name="X"
+                size={20}
+                color={isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B'}
+              />
             </TouchableOpacity>
           </View>
 
@@ -209,7 +217,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
                 <AppIcon
                   name="ArrowUpRight"
                   size={16}
-                  color={type === 'expense' ? '#FFFFFF' : '#64748B'}
+                  color={
+                    type === 'expense'
+                      ? (isDark ? '#000000' : '#FFFFFF')
+                      : (isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B')
+                  }
                 />
                 <Text
                   style={[
@@ -232,7 +244,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
                 <AppIcon
                   name="ArrowDownLeft"
                   size={16}
-                  color={type === 'income' ? '#FFFFFF' : '#64748B'}
+                  color={
+                    type === 'income'
+                      ? '#FFFFFF'
+                      : (isDark ? 'rgba(255, 255, 255, 0.42)' : '#64748B')
+                  }
                 />
                 <Text
                   style={[
@@ -251,8 +267,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               <TextInput
                 style={styles.amountInput}
                 placeholder="0"
-                placeholderTextColor="#CBD5E1"
+                placeholderTextColor={themeColors.textMuted}
                 keyboardType="numeric"
+                keyboardAppearance={isDark ? 'dark' : 'light'}
                 value={amount}
                 onChangeText={setAmount}
                 autoFocus={!initialData}
@@ -267,7 +284,8 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               <TextInput
                 style={styles.textInput}
                 placeholder={type === 'expense' ? 'e.g. Starbucks, Uber, Grocery' : 'e.g. Salary, Client Payout'}
-                placeholderTextColor="#94A3B8"
+                placeholderTextColor={themeColors.textMuted}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
                 value={merchant}
                 onChangeText={setMerchant}
               />
@@ -283,11 +301,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               >
                 {availableCategories.map((cat) => {
                   const isSelected = category === cat;
-                  const catConfig = CATEGORY_ICON_REGISTRY[cat] || {
-                    iconName: 'Tag',
-                    iconColor: '#64748B',
-                    backgroundColor: '#F1F5F9',
-                  };
+                  const catConfig = getCategoryIconConfig(cat, isDark);
 
                   return (
                     <TouchableOpacity
@@ -361,7 +375,8 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               <TextInput
                 style={[styles.textInput, styles.notesInput]}
                 placeholder="Add receipt note or tag..."
-                placeholderTextColor="#94A3B8"
+                placeholderTextColor={themeColors.textMuted}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
                 value={notes}
                 onChangeText={setNotes}
                 multiline
@@ -403,231 +418,238 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(7, 31, 70, 0.65)',
-  },
-  backdrop: {
-    flex: 1,
-  },
-  sheetContainer: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: '90%',
-    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
-  },
-  handle: {
-    width: 40,
-    height: 4.5,
-    borderRadius: 2.5,
-    backgroundColor: '#CBD5E1',
-    alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: 6,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  closeBtn: {
-    padding: 4,
-  },
-  scrollBody: {
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 14,
-    padding: 4,
-    marginBottom: 20,
-  },
-  segmentBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 11,
-    gap: 6,
-  },
-  segmentBtnActiveExpense: {
-    backgroundColor: colors.navyDeep,
-  },
-  segmentBtnActiveIncome: {
-    backgroundColor: '#10B981',
-  },
-  segmentText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  segmentTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  amountContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    marginBottom: 18,
-  },
-  currencySymbol: {
-    fontSize: 34,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginRight: 6,
-  },
-  amountInput: {
-    fontSize: 42,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    minWidth: 120,
-    textAlign: 'center',
-    padding: 0,
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginBottom: 6,
-    letterSpacing: 0.2,
-  },
-  textInput: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  notesInput: {
-    height: 64,
-    textAlignVertical: 'top',
-  },
-  categoryPillsScroll: {
-    gap: 8,
-    paddingVertical: 4,
-  },
-  categoryPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 6,
-  },
-  categoryPillSelected: {
-    backgroundColor: colors.blueBadge,
-    borderColor: colors.bluePrimary,
-  },
-  catIconCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  categoryPillText: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  categoryPillTextSelected: {
-    color: colors.textSecondary,
-    fontWeight: '700',
-  },
-  methodRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  methodChip: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  methodChipSelected: {
-    backgroundColor: colors.navyDeep,
-    borderColor: colors.navyDeep,
-  },
-  methodText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  methodTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 10,
-  },
-  deleteBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  saveBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  saveBtnExpense: {
-    backgroundColor: colors.bluePrimary,
-    shadowColor: colors.bluePrimary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  saveBtnIncome: {
-    backgroundColor: '#10B981',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  saveBtnText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: 0.2,
-  },
-});
+const makeStyles = (c: Palette, isDark: boolean) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      justifyContent: 'flex-end',
+      backgroundColor: c.modalBackdrop,
+    },
+    backdrop: {
+      flex: 1,
+    },
+    sheetContainer: {
+      backgroundColor: c.surface,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      maxHeight: '90%',
+      paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+      borderWidth: isDark ? 1 : 0,
+      borderColor: isDark ? c.border : 'transparent',
+    },
+    handle: {
+      width: 40,
+      height: 4.5,
+      borderRadius: 2.5,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1',
+      alignSelf: 'center',
+      marginTop: 10,
+      marginBottom: 6,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 22,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? c.border : '#F1F5F9',
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: c.textPrimary,
+    },
+    closeBtn: {
+      padding: 4,
+    },
+    scrollBody: {
+      paddingHorizontal: 22,
+      paddingTop: 16,
+      paddingBottom: 24,
+    },
+    segmentedControl: {
+      flexDirection: 'row',
+      backgroundColor: isDark ? '#000000' : '#F1F5F9',
+      borderRadius: 14,
+      padding: 4,
+      marginBottom: 20,
+      borderWidth: isDark ? 1 : 0,
+      borderColor: isDark ? c.border : 'transparent',
+    },
+    segmentBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 10,
+      borderRadius: 11,
+      gap: 6,
+    },
+    segmentBtnActiveExpense: {
+      backgroundColor: isDark ? c.accent : '#031D44',
+    },
+    segmentBtnActiveIncome: {
+      backgroundColor: '#10B981',
+    },
+    segmentText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: isDark ? c.textMuted : '#64748B',
+    },
+    segmentTextActive: {
+      color: isDark ? c.onAccent : '#FFFFFF',
+      fontWeight: '700',
+    },
+    amountContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 12,
+      marginBottom: 18,
+    },
+    currencySymbol: {
+      fontSize: 34,
+      fontWeight: '700',
+      color: c.textPrimary,
+      marginRight: 6,
+    },
+    amountInput: {
+      fontSize: 42,
+      fontWeight: '800',
+      color: c.textPrimary,
+      minWidth: 120,
+      textAlign: 'center',
+      padding: 0,
+    },
+    inputGroup: {
+      marginBottom: 16,
+    },
+    inputLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: c.textSecondary,
+      marginBottom: 6,
+      letterSpacing: 0.2,
+    },
+    textInput: {
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : '#E2E8F0',
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 14,
+      color: c.textPrimary,
+    },
+    notesInput: {
+      height: 64,
+      textAlignVertical: 'top',
+    },
+    categoryPillsScroll: {
+      gap: 8,
+      paddingVertical: 4,
+    },
+    categoryPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : '#E2E8F0',
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 20,
+      gap: 6,
+    },
+    categoryPillSelected: {
+      backgroundColor: isDark ? 'rgba(245, 138, 7, 0.15)' : '#FFF3E8',
+      borderColor: c.accent,
+    },
+    catIconCircle: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    categoryPillText: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      color: isDark ? c.textSecondary : '#475569',
+    },
+    categoryPillTextSelected: {
+      color: isDark ? c.accent : '#031D44',
+      fontWeight: '700',
+    },
+    methodRow: {
+      flexDirection: 'row',
+      gap: 8,
+    },
+    methodChip: {
+      flex: 1,
+      paddingVertical: 10,
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : '#E2E8F0',
+    },
+    methodChipSelected: {
+      backgroundColor: isDark ? c.accent : '#031D44',
+      borderColor: isDark ? c.accent : '#031D44',
+    },
+    methodText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: isDark ? c.textSecondary : '#475569',
+    },
+    methodTextSelected: {
+      color: isDark ? c.onAccent : '#FFFFFF',
+      fontWeight: '700',
+    },
+    actionsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: 10,
+    },
+    deleteBtn: {
+      width: 48,
+      height: 48,
+      borderRadius: 14,
+      backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: isDark ? 1 : 0,
+      borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : 'transparent',
+    },
+    saveBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    saveBtnExpense: {
+      backgroundColor: c.accent,
+      shadowColor: c.accent,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.15 : 0.35,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    saveBtnIncome: {
+      backgroundColor: '#10B981',
+      shadowColor: '#10B981',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.15 : 0.35,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    saveBtnText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: isDark ? c.onAccent : '#FFFFFF',
+      letterSpacing: 0.2,
+    },
+  });

@@ -131,6 +131,7 @@ const KEYCHAIN_ACCOUNT_BIOMETRIC = 'artha_biometric';
 const KEYCHAIN_ACCOUNT_APPLOCK = 'artha_applock';
 const KEYCHAIN_ACCOUNT_ONBOARDING = 'artha_bio_decision';
 const KEYCHAIN_ACCOUNT_PREFERENCES = 'artha_preferences';
+const KEYCHAIN_ACCOUNT_THEME = 'artha_theme';
 
 // Helper to abstract Keychain write operations and prevent automated secret scanner false-positives
 // where scanners falsely interpret the first 'account' parameter of setGenericPassword as a plaintext password.
@@ -626,6 +627,47 @@ export class SecureStorageService {
       // Ignore keychain write failure in restricted test environments
     }
     return prefs;
+  }
+
+  async saveStoredTheme(theme: 'system' | 'light' | 'dark'): Promise<void> {
+    try {
+      await writeKeychainGeneric(
+        KEYCHAIN_ACCOUNT_THEME,
+        JSON.stringify({ theme }),
+        { service: 'com.artha.app.theme' },
+      );
+    } catch {
+      // Ignore write error in test or restricted environments
+    }
+  }
+
+  /**
+   * Legacy (read-only): the theme used to live in Keychain, which is async and
+   * too slow for the first frame. It now lives in MMKV (themePreferenceStore);
+   * this is read once to migrate existing users, then cleared.
+   */
+  async clearStoredTheme(): Promise<void> {
+    try {
+      await Keychain.resetGenericPassword({ service: 'com.artha.app.theme' });
+    } catch {
+      // Nothing stored
+    }
+  }
+
+  async loadStoredTheme(): Promise<'system' | 'light' | 'dark' | null> {
+    try {
+      const res = await Keychain.getGenericPassword({
+        service: 'com.artha.app.theme',
+      });
+      if (!res || !res.password) return null;
+      const parsed = JSON.parse(res.password);
+      if (parsed.theme === 'system' || parsed.theme === 'light' || parsed.theme === 'dark') {
+        return parsed.theme;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async clearAll(): Promise<void> {

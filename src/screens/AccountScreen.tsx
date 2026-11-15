@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
+  Animated,
   View,
   Text,
   StyleSheet,
@@ -14,6 +15,7 @@ import {
   Image,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Platform,
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { spacing, borderRadius, shadows } from '../theme/spacing';
@@ -21,6 +23,7 @@ import { Icon, IconName } from '../components/common/Icon';
 import { AppIcon, AppIconName } from '../components/icons/AppIcon';
 import { AccountPageSheetModal } from '../components/common/AccountPageSheetModal';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { toast } from '../context/ToastContext';
 import {
   SessionItem,
@@ -57,6 +60,13 @@ type DetailSheetKey =
   | 'sessions'
   | 'help_center'
   | 'blocked_users';
+
+const PIN_KEYPAD_ROWS: string[][] = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['', '0', 'DEL'],
+];
 
 // SessionItem is imported from sessionsApi -- no local mock data
 
@@ -105,6 +115,8 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     logout,
     refreshProfile,
     updateProfile,
+    requestEmailChange,
+    confirmEmailChange,
     deleteAccount,
     changePassword,
     requestPasswordReset,
@@ -117,8 +129,9 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [activeSheet, setActiveSheet] = useState<DetailSheetKey>(null);
 
-  // Appearance toggle (Glassy button)
-  const [appearanceMode, setAppearanceMode] = useState<'Light' | 'Dark'>('Light');
+  // Global Theme Hook
+  const { theme, isDark, toggleTheme, setTheme, colors: themeColors } = useTheme();
+  const styles = useMemo(() => createStyles(themeColors, isDark), [themeColors, isDark]);
 
   // Account Settings state
   const [currency, setCurrency] = useState('INR');
@@ -149,9 +162,12 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
   const [nameFieldError, setNameFieldError] = useState<string | null>(null);
 
   // Email verification modal during email change
+  const [showEmailPasswordStep, setShowEmailPasswordStep] = useState(false);
   const [showEmailVerifyStep, setShowEmailVerifyStep] = useState(false);
   const [pendingNewEmail, setPendingNewEmail] = useState('');
+  const [emailChangePassword, setEmailChangePassword] = useState('');
   const [emailOtpCode, setEmailOtpCode] = useState('');
+  const [requestingEmailOtp, setRequestingEmailOtp] = useState(false);
   const [verifyingEmailOtp, setVerifyingEmailOtp] = useState(false);
 
   // Account Security state
@@ -171,10 +187,19 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     user?.securityPreferences?.biometricEnabled ?? false,
   );
   const [biometricBusy, setBiometricBusy] = useState(false);
+  const [pinEnabled, setPinEnabled] = useState(
+    user?.securityPreferences?.pinEnabled ?? false,
+  );
   const [showPinSetupModal, setShowPinSetupModal] = useState(false);
-  const [pinInput, setPinInput] = useState('');
-  const [pinConfirmInput, setPinConfirmInput] = useState('');
+  const [pinStep, setPinStep] = useState<'enter' | 'confirm'>('enter');
+  const [pinDraft, setPinDraft] = useState('');
+  const [pinCurrent, setPinCurrent] = useState('');
+  const [pinErrorMsg, setPinErrorMsg] = useState<string | null>(null);
   const [savingPin, setSavingPin] = useState(false);
+  const [showPinDisableModal, setShowPinDisableModal] = useState(false);
+  const [pinDisableCurrent, setPinDisableCurrent] = useState('');
+  const [pinDisableError, setPinDisableError] = useState<string | null>(null);
+  const [disablingPin, setDisablingPin] = useState(false);
   const isBiometricSupported = Boolean(supportedBiometry);
 
   // Active Sessions state — real data fetched from backend
@@ -206,20 +231,19 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     setBiometricLoginEnabled(user?.securityPreferences?.biometricEnabled ?? false);
   }, [user?.securityPreferences?.biometricEnabled]);
 
-  // Load real sessions from backend when the sessions sheet opens
+  // Keep the PIN switch in sync with the actual server/device state (updated
+  // via refreshProfile() after a successful enable/disable)
   useEffect(() => {
-    if (activeSheet === 'sessions') {
-      loadSessions();
-    }
-  }, [activeSheet, loadSessions]);
+    setPinEnabled(user?.securityPreferences?.pinEnabled ?? false);
+  }, [user?.securityPreferences?.pinEnabled]);
 
   // Determine if user authenticated via Social Provider (Google / Apple)
   const isSocialUser = Boolean(
     user?.provider === 'google' ||
-      user?.provider === 'apple' ||
-      user?.linkedProviders?.includes('GOOGLE') ||
-      user?.linkedProviders?.includes('APPLE') ||
-      (user && !user.hasPassword),
+    user?.provider === 'apple' ||
+    user?.linkedProviders?.includes('GOOGLE') ||
+    user?.linkedProviders?.includes('APPLE') ||
+    (user && !user.hasPassword),
   );
 
   const socialProviderName =
@@ -230,7 +254,38 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
         : 'Google';
 
   // Smooth scroll tracker
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Micro-animations for PIN Setup & PIN Disable modals
+  const pinDotAnims = useRef([
+    new Animated.Value(1),
+    new Animated.Value(1),
+    new Animated.Value(1),
+    new Animated.Value(1),
+  ]).current;
+  const pinShakeAnim = useRef(new Animated.Value(0)).current;
+
+  const animatePinDot = (index: number) => {
+    if (index < 0 || index >= 4) return;
+    pinDotAnims[index].setValue(0.7);
+    Animated.spring(pinDotAnims[index], {
+      toValue: 1,
+      friction: 4,
+      tension: 160,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const triggerPinShake = () => {
+    pinShakeAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(pinShakeAnim, { toValue: -10, duration: 40, useNativeDriver: true }),
+      Animated.timing(pinShakeAnim, { toValue: 10, duration: 40, useNativeDriver: true }),
+      Animated.timing(pinShakeAnim, { toValue: -6, duration: 40, useNativeDriver: true }),
+      Animated.timing(pinShakeAnim, { toValue: 6, duration: 40, useNativeDriver: true }),
+      Animated.timing(pinShakeAnim, { toValue: 0, duration: 30, useNativeDriver: true }),
+    ]).start();
+  };
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       onScrollingChange?.(true);
@@ -263,11 +318,13 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     return name.slice(0, 2).toUpperCase();
   };
 
-  // Appearance toggle
-  const toggleAppearance = () => {
-    const next = appearanceMode === 'Light' ? 'Dark' : 'Light';
-    setAppearanceMode(next);
-    toast.info(`Switched to ${next} Mode.`, 'Appearance');
+  // Appearance: 2 options only in-app (Light and Dark). Default remains system theme on initial load.
+  const handleSelectTheme = (newMode: 'light' | 'dark') => {
+    if (theme === newMode) {
+      return;
+    }
+    setTheme(newMode);
+    toast.info(`Theme set to ${newMode === 'dark' ? 'Dark' : 'Light'}.`, 'Appearance');
   };
 
   // 1. Profile Updation
@@ -278,18 +335,16 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     }
     setNameFieldError(null);
 
-    // If email is changed by non-social user, trigger OTP verification
+    // If email is changed by non-social user, require password confirmation
+    // before requesting a verification code for the new address.
     const emailChanged =
       !isSocialUser &&
       profileEmailInput.trim().toLowerCase() !== (user?.email ?? '').toLowerCase();
 
     if (emailChanged) {
       setPendingNewEmail(profileEmailInput.trim());
-      setShowEmailVerifyStep(true);
-      toast.info(
-        `Verification code dispatched to ${profileEmailInput.trim()}.`,
-        'Verify Email',
-      );
+      setEmailChangePassword('');
+      setShowEmailPasswordStep(true);
       return;
     }
 
@@ -308,6 +363,25 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     }
   };
 
+  const handleRequestEmailChangeOtp = async () => {
+    if (!emailChangePassword) {
+      toast.error('Enter your current password to continue.', 'Password Required');
+      return;
+    }
+    setRequestingEmailOtp(true);
+    try {
+      const res = await requestEmailChange(pendingNewEmail, emailChangePassword);
+      setShowEmailPasswordStep(false);
+      setShowEmailVerifyStep(true);
+      setEmailChangePassword('');
+      toast.info(res.message, 'Verify Email');
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not send verification code.', 'Error');
+    } finally {
+      setRequestingEmailOtp(false);
+    }
+  };
+
   const handleConfirmEmailOtp = async () => {
     if (emailOtpCode.trim().length < 6) {
       toast.error('Enter valid 6-digit code.', 'Verification');
@@ -315,14 +389,10 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     }
     setVerifyingEmailOtp(true);
     try {
-      await updateProfile({
-        displayName: profileNameInput.trim(),
-        phoneNumber: profilePhoneInput.trim(),
-        email: pendingNewEmail,
-      });
+      await confirmEmailChange(emailOtpCode.trim());
       setShowEmailVerifyStep(false);
       setEmailOtpCode('');
-      toast.success('Email verified and profile updated.', 'Profile Saved');
+      toast.success('Email address updated.', 'Profile Saved');
       setActiveSheet(null);
     } catch (err: any) {
       toast.error(err?.message || 'Invalid code.', 'Verification Failed');
@@ -449,29 +519,119 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
     }
   };
 
-  const handleSavePin = async () => {
-    if (pinInput.length < 4) {
-      toast.error('PIN must be 4 to 6 digits.', 'App Password');
+  const handlePinDigitPress = (digit: string) => {
+    if (savingPin || digit === '') return;
+    setPinErrorMsg(null);
+
+    if (digit === 'DEL') {
+      if (pinCurrent.length > 0) {
+        animatePinDot(pinCurrent.length - 1);
+        setPinCurrent((prev) => prev.slice(0, -1));
+      }
       return;
     }
-    if (pinInput !== pinConfirmInput) {
-      toast.error('PINs do not match.', 'App Password');
-      return;
+
+    if (pinCurrent.length < 4) {
+      const next = pinCurrent + digit;
+      animatePinDot(next.length - 1);
+      setPinCurrent(next);
+      if (next.length === 4) {
+        if (pinStep === 'enter') {
+          setTimeout(() => {
+            setPinDraft(next);
+            setPinCurrent('');
+            setPinStep('confirm');
+          }, 100);
+        } else {
+          if (next === pinDraft) {
+            handleCompletePinSetup(next);
+          } else {
+            setPinErrorMsg('PINs do not match. Please try again.');
+            triggerPinShake();
+            setTimeout(() => {
+              setPinStep('enter');
+              setPinDraft('');
+              setPinCurrent('');
+            }, 600);
+          }
+        }
+      }
     }
+  };
+
+  const handleCompletePinSetup = async (finalPin: string) => {
     setSavingPin(true);
+    setPinErrorMsg(null);
     try {
-      await configurePin({ enable: true, newPin: pinInput });
+      await configurePin({ enable: true, newPin: finalPin });
       setShowPinSetupModal(false);
-      setPinInput('');
-      setPinConfirmInput('');
-      toast.success('App password configured successfully.', 'App Security');
+      setPinStep('enter');
+      setPinDraft('');
+      setPinCurrent('');
+      toast.success('4-digit App PIN configured successfully.', 'App Security');
     } catch (err: any) {
-      toast.error(
-        err?.message ?? 'Could not configure app password.',
-        'App Security',
-      );
+      setPinErrorMsg(err?.message ?? 'Could not configure app PIN.');
+      triggerPinShake();
     } finally {
       setSavingPin(false);
+    }
+  };
+
+  const openPinSetup = () => {
+    setPinStep('enter');
+    setPinDraft('');
+    setPinCurrent('');
+    setPinErrorMsg(null);
+    setShowPinSetupModal(true);
+  };
+
+  const handleTogglePin = (val: boolean) => {
+    if (disablingPin) return;
+    if (val) {
+      openPinSetup();
+    } else {
+      setPinDisableCurrent('');
+      setPinDisableError(null);
+      setShowPinDisableModal(true);
+    }
+  };
+
+  const handlePinDisableDigitPress = (digit: string) => {
+    if (disablingPin || digit === '') return;
+    setPinDisableError(null);
+
+    if (digit === 'DEL') {
+      if (pinDisableCurrent.length > 0) {
+        animatePinDot(pinDisableCurrent.length - 1);
+        setPinDisableCurrent((prev) => prev.slice(0, -1));
+      }
+      return;
+    }
+
+    if (pinDisableCurrent.length < 4) {
+      const next = pinDisableCurrent + digit;
+      animatePinDot(next.length - 1);
+      setPinDisableCurrent(next);
+      if (next.length === 4) {
+        handleConfirmDisablePin(next);
+      }
+    }
+  };
+
+  const handleConfirmDisablePin = async (currentPin: string) => {
+    setDisablingPin(true);
+    setPinDisableError(null);
+    try {
+      await configurePin({ enable: false, currentPin });
+      setShowPinDisableModal(false);
+      setPinDisableCurrent('');
+      toast.success('App Lock PIN removed.', 'App Security');
+    } catch (err: any) {
+      setPinDisableError(err?.message ?? 'Incorrect PIN. Please try again.');
+      triggerPinShake();
+      setPinDisableCurrent('');
+    } finally {
+      setDisablingPin(false);
     }
   };
 
@@ -492,6 +652,13 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
       setSessionsLoading(false);
     }
   }, []);
+
+  // Load real sessions from backend when the sessions sheet opens
+  useEffect(() => {
+    if (activeSheet === 'sessions') {
+      loadSessions();
+    }
+  }, [activeSheet, loadSessions]);
 
   /** Confirm that a session is recognised — UI only (keeps it in list). */
   const handleKeepSession = (id: string) => {
@@ -615,11 +782,6 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
 
   return (
     <View style={styles.root}>
-      {/* App Header */}
-      <View style={styles.headerBar}>
-        <Text style={styles.headerTitle}>Account</Text>
-      </View>
-
       <ScrollView
         style={styles.scrollArea}
         contentContainerStyle={styles.scrollContent}
@@ -630,11 +792,26 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.navyPrimary}
+            tintColor={isDark ? '#F58A07' : colors.navyPrimary}
           />
         }
       >
-        {/* 1. TOP PROFILE CARD WITH BOTTOM-RIGHT EDIT PENCIL */}
+        {/* ======================================================== */}
+        {/* 1. TOP HEADER                                            */}
+        {/* ======================================================== */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerCaption}>PROFILE & SETTINGS</Text>
+            <Text style={styles.headerTitle}>Account</Text>
+          </View>
+
+          <View style={styles.statusPill}>
+            <View style={styles.statusDot} />
+            <Text style={styles.statusPillText}>Personal</Text>
+          </View>
+        </View>
+
+        {/* 2. TOP PROFILE CARD WITH BOTTOM-RIGHT EDIT PENCIL */}
         <View style={styles.profileCard} testID="profile-card">
           <View style={styles.profileAvatarBox}>
             {user?.avatarUrl ? (
@@ -669,7 +846,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
             testID="profile-edit-pencil-btn"
             accessibilityLabel="Edit Profile"
           >
-            <AppIcon name="Pencil" size={15} color={colors.navyPrimary} />
+            <AppIcon name="Pencil" size={15} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
           </TouchableOpacity>
         </View>
 
@@ -685,7 +862,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="account-settings-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="SlidersHorizontal" size={18} color={colors.navyPrimary} />
+                <AppIcon name="SlidersHorizontal" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Account Settings</Text>
@@ -704,7 +881,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="account-open-security-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Shield" size={18} color={colors.navyPrimary} />
+                <AppIcon name="Shield" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Account Security</Text>
@@ -719,28 +896,70 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
         <View style={styles.sectionWrap}>
           <Text style={styles.sectionTitle}>Preferences</Text>
           <View style={styles.cardGroup}>
-            {/* Appearance Row with Single Glassy Toggle Button */}
+            {/* Appearance Row with 2 Buttons: Light & Dark */}
             <View style={styles.rowItem}>
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Lightbulb" size={18} color={colors.navyPrimary} />
+                <AppIcon name={isDark ? 'Moon' : 'Sun'} size={18} color={isDark ? '#F58A07' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Appearance</Text>
-                <Text style={styles.rowSubtitle}>Theme mode</Text>
+                <Text style={styles.rowSubtitle}>{isDark ? 'Dark theme' : 'Light theme'}</Text>
               </View>
 
-              {/* Glassy Button (Clear-All Style from Notifications) */}
-              <TouchableOpacity
-                style={styles.glassyThemeBtn}
-                onPress={toggleAppearance}
-                activeOpacity={0.8}
-                testID="appearance-toggle-btn"
-                accessibilityLabel="Toggle Light / Dark mode"
-              >
-                <Text style={styles.glassyThemeBtnText}>
-                  {appearanceMode === 'Light' ? 'Light' : 'Dark'}
-                </Text>
-              </TouchableOpacity>
+              {/* 2 Buttons Only: Light and Dark */}
+              <View style={styles.themeSegmentTrack}>
+                <TouchableOpacity
+                  style={[
+                    styles.themeSegmentBtn,
+                    !isDark && styles.themeSegmentBtnActive,
+                  ]}
+                  onPress={() => handleSelectTheme('light')}
+                  activeOpacity={0.7}
+                  testID="theme-light-btn"
+                  accessibilityRole="button"
+                  accessibilityLabel="Switch to Light theme"
+                >
+                  <AppIcon
+                    name="Sun"
+                    size={13}
+                    color={!isDark ? '#FFFFFF' : (isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B')}
+                  />
+                  <Text
+                    style={[
+                      styles.themeSegmentText,
+                      !isDark && styles.themeSegmentTextActive,
+                    ]}
+                  >
+                    Light
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.themeSegmentBtn,
+                    isDark && styles.themeSegmentBtnActive,
+                  ]}
+                  onPress={() => handleSelectTheme('dark')}
+                  activeOpacity={0.7}
+                  testID="theme-dark-btn"
+                  accessibilityRole="button"
+                  accessibilityLabel="Switch to Dark theme"
+                >
+                  <AppIcon
+                    name="Moon"
+                    size={13}
+                    color={isDark ? '#000000' : '#64748B'}
+                  />
+                  <Text
+                    style={[
+                      styles.themeSegmentText,
+                      isDark && styles.themeSegmentTextActive,
+                    ]}
+                  >
+                    Dark
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             <View style={styles.divider} />
@@ -753,7 +972,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="notifications-settings-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Bell" size={18} color={colors.navyPrimary} />
+                <AppIcon name="Bell" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Notifications</Text>
@@ -776,7 +995,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="account-applock-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Lock" size={18} color={colors.navyPrimary} />
+                <AppIcon name="Lock" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>App Lock & Biometrics</Text>
@@ -795,7 +1014,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="account-sessions-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Laptop" size={18} color={colors.navyPrimary} />
+                <AppIcon name="Laptop" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Active Sessions</Text>
@@ -817,7 +1036,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="help-center-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="CircleHelp" size={18} color={colors.navyPrimary} />
+                <AppIcon name="CircleHelp" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Help Center</Text>
@@ -835,7 +1054,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="invite-friends-btn"
             >
               <View style={styles.rowIconCircle}>
-                <AppIcon name="Share2" size={18} color={colors.navyPrimary} />
+                <AppIcon name="Share2" size={18} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
               </View>
               <View style={styles.rowTextWrap}>
                 <Text style={styles.rowTitle}>Invite Friends</Text>
@@ -869,6 +1088,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
         visible={activeSheet === 'manage_profile'}
         onClose={() => {
           setActiveSheet(null);
+          setShowEmailPasswordStep(false);
           setShowEmailVerifyStep(false);
         }}
         topLabel="ACCOUNT"
@@ -880,7 +1100,48 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
           contentContainerStyle={styles.sheetBodyContent}
           showsVerticalScrollIndicator={false}
         >
-          {showEmailVerifyStep ? (
+          {showEmailPasswordStep ? (
+            /* Password confirmation before requesting an email-change OTP */
+            <View style={styles.otpVerifyCard}>
+              <Text style={styles.otpCardTitle}>Confirm Your Password</Text>
+              <Text style={styles.otpCardSub}>
+                Enter your current password to send a verification code to{' '}
+                {pendingNewEmail}
+              </Text>
+
+              <TextInput
+                style={styles.textInput}
+                value={emailChangePassword}
+                onChangeText={setEmailChangePassword}
+                placeholder="Current password"
+                placeholderTextColor="#94A3B8"
+                secureTextEntry
+                autoFocus
+                testID="email-change-password-input"
+              />
+
+              <TouchableOpacity
+                style={styles.actionPillBtn}
+                onPress={handleRequestEmailChangeOtp}
+                disabled={requestingEmailOtp}
+                activeOpacity={0.8}
+                testID="request-email-change-otp-btn"
+              >
+                {requestingEmailOtp ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.actionPillBtnText}>Send Verification Code</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelLink}
+                onPress={() => setShowEmailPasswordStep(false)}
+              >
+                <Text style={styles.cancelLinkText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          ) : showEmailVerifyStep ? (
             /* OTP Verification for Email Update */
             <View style={styles.otpVerifyCard}>
               <Text style={styles.otpCardTitle}>Verify New Email</Text>
@@ -931,7 +1192,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                   <View style={styles.readOnlyInput}>
                     <Text style={styles.readOnlyText}>{user?.displayName || 'User'}</Text>
                     <View style={styles.socialLinkedBadge}>
-                      <AppIcon name="Lock" size={12} color={colors.navyPrimary} />
+                      <AppIcon name="Lock" size={12} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
                       <Text style={styles.socialLinkedBadgeText}>Linked via {socialProviderName}</Text>
                     </View>
                   </View>
@@ -960,7 +1221,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                   <View style={styles.readOnlyInput}>
                     <Text style={styles.readOnlyText}>{user?.email || 'email@example.com'}</Text>
                     <View style={styles.socialLinkedBadge}>
-                      <AppIcon name="Lock" size={12} color={colors.navyPrimary} />
+                      <AppIcon name="Lock" size={12} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
                       <Text style={styles.socialLinkedBadgeText}>Linked via {socialProviderName}</Text>
                     </View>
                   </View>
@@ -1047,7 +1308,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <AppIcon
                 name={openDropdown === 'currency' ? 'ChevronUp' : 'ChevronDown'}
                 size={18}
-                color={openDropdown === 'currency' ? colors.navyPrimary : '#64748B'}
+                color={openDropdown === 'currency' ? (isDark ? '#F58A07' : colors.navyPrimary) : (isDark ? '#FFFFFF' : '#64748B')}
               />
             </TouchableOpacity>
 
@@ -1079,7 +1340,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                         {c.label}
                       </Text>
                       {isSelected && (
-                        <AppIcon name="Check" size={16} color={colors.navyPrimary} />
+                        <AppIcon name="Check" size={16} color={isDark ? '#F58A07' : colors.navyPrimary} />
                       )}
                     </TouchableOpacity>
                   );
@@ -1106,7 +1367,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <AppIcon
                 name={openDropdown === 'timezone' ? 'ChevronUp' : 'ChevronDown'}
                 size={18}
-                color={openDropdown === 'timezone' ? colors.navyPrimary : '#64748B'}
+                color={openDropdown === 'timezone' ? (isDark ? '#F58A07' : colors.navyPrimary) : (isDark ? '#FFFFFF' : '#64748B')}
               />
             </TouchableOpacity>
 
@@ -1138,7 +1399,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                         {tz.label}
                       </Text>
                       {isSelected && (
-                        <AppIcon name="Check" size={16} color={colors.navyPrimary} />
+                        <AppIcon name="Check" size={16} color={isDark ? '#F58A07' : colors.navyPrimary} />
                       )}
                     </TouchableOpacity>
                   );
@@ -1165,7 +1426,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <AppIcon
                 name={openDropdown === 'language' ? 'ChevronUp' : 'ChevronDown'}
                 size={18}
-                color={openDropdown === 'language' ? colors.navyPrimary : '#64748B'}
+                color={openDropdown === 'language' ? (isDark ? '#F58A07' : colors.navyPrimary) : (isDark ? '#FFFFFF' : '#64748B')}
               />
             </TouchableOpacity>
 
@@ -1197,7 +1458,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                         {lang.label}
                       </Text>
                       {isSelected && (
-                        <AppIcon name="Check" size={16} color={colors.navyPrimary} />
+                        <AppIcon name="Check" size={16} color={isDark ? '#F58A07' : colors.navyPrimary} />
                       )}
                     </TouchableOpacity>
                   );
@@ -1218,7 +1479,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               testID="blocked-users-btn"
             >
               <View style={styles.advancedRowLeft}>
-                <AppIcon name="X" size={17} color={colors.navyPrimary} />
+                <AppIcon name="X" size={17} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
                 <Text style={styles.advancedRowText}>Blocked Users</Text>
               </View>
               <AppIcon name="ChevronRight" size={16} color="#94A3B8" />
@@ -1269,7 +1530,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                 <Icon
                   name={isSocialUser ? (socialProviderName.toLowerCase() as any) : 'mail'}
                   size={18}
-                  color={colors.navyPrimary}
+                  color={isDark ? '#FFFFFF' : colors.navyPrimary}
                 />
               </View>
               <View>
@@ -1291,7 +1552,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
 
           {isSocialUser ? (
             <View style={styles.socialNoticeCard}>
-              <AppIcon name="Shield" size={18} color={colors.navyPrimary} />
+              <AppIcon name="Shield" size={18} color={isDark ? '#F58A07' : colors.navyPrimary} />
               <Text style={styles.socialNoticeText}>
                 Your account is linked with {socialProviderName}. Password management is handled by your provider.
               </Text>
@@ -1418,7 +1679,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <Switch
                 value={notifExpense}
                 onValueChange={setNotifExpense}
-                trackColor={{ false: '#CBD5E1', true: colors.navyPrimary }}
+                trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
                 thumbColor="#FFFFFF"
               />
             </View>
@@ -1430,7 +1691,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <Switch
                 value={notifGroup}
                 onValueChange={setNotifGroup}
-                trackColor={{ false: '#CBD5E1', true: colors.navyPrimary }}
+                trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
                 thumbColor="#FFFFFF"
               />
             </View>
@@ -1442,7 +1703,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <Switch
                 value={notifBudget}
                 onValueChange={setNotifBudget}
-                trackColor={{ false: '#CBD5E1', true: colors.navyPrimary }}
+                trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
                 thumbColor="#FFFFFF"
               />
             </View>
@@ -1454,7 +1715,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
               <Switch
                 value={notifWeekly}
                 onValueChange={setNotifWeekly}
-                trackColor={{ false: '#CBD5E1', true: colors.navyPrimary }}
+                trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
                 thumbColor="#FFFFFF"
               />
             </View>
@@ -1481,17 +1742,17 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
             {/* 1. Enable Biometric Login */}
             <View style={styles.cleanSwitchItem}>
               <View style={styles.cleanSwitchItemLeft}>
-                <AppIcon name="Shield" size={20} color={colors.navyPrimary} />
+                <AppIcon name="Shield" size={20} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
                 <Text style={styles.cleanSwitchItemLabel}>Enable Biometric Login</Text>
               </View>
               {biometricBusy ? (
-                <ActivityIndicator size="small" color={colors.navyPrimary} />
+                <ActivityIndicator size="small" color={isDark ? '#F58A07' : colors.navyPrimary} />
               ) : (
                 <Switch
                   value={biometricLoginEnabled}
                   onValueChange={handleToggleBiometric}
                   disabled={!isBiometricSupported && !biometricLoginEnabled}
-                  trackColor={{ false: '#CBD5E1', true: colors.navyPrimary }}
+                  trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
                   thumbColor="#FFFFFF"
                   testID="enable-biometrics-switch"
                 />
@@ -1508,77 +1769,214 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
 
             <View style={styles.divider} />
 
-            {/* 2. Setup App Password */}
-            <TouchableOpacity
-              style={styles.cleanActionRow}
-              onPress={() => setShowPinSetupModal(true)}
-              activeOpacity={0.7}
-              testID="setup-app-password-btn"
-            >
+            {/* 2. App Lock (4-Digit PIN) */}
+            <View style={styles.cleanSwitchItem}>
               <View style={styles.cleanSwitchItemLeft}>
-                <AppIcon name="Lock" size={20} color={colors.navyPrimary} />
-                <Text style={styles.cleanSwitchItemLabel}>Setup App Password</Text>
+                <AppIcon name="Lock" size={20} color={isDark ? '#FFFFFF' : colors.navyPrimary} />
+                <Text style={styles.cleanSwitchItemLabel}>Setup App Password / 4-Digit PIN</Text>
               </View>
-              <AppIcon name="ChevronRight" size={16} color="#94A3B8" />
-            </TouchableOpacity>
+              <Switch
+                value={pinEnabled}
+                onValueChange={handleTogglePin}
+                trackColor={{ false: isDark ? 'rgba(255, 255, 255, 0.2)' : '#CBD5E1', true: isDark ? '#F58A07' : colors.navyPrimary }}
+                thumbColor="#FFFFFF"
+                testID="enable-pin-switch"
+              />
+            </View>
+
           </View>
         </ScrollView>
       </AccountPageSheetModal>
 
-      {/* Sub-Modal: App Password / PIN Setup */}
+      {/* Sub-Modal: App PIN Setup matching AppLockScreen Keypad UI */}
       <Modal
         visible={showPinSetupModal}
         transparent
-        animationType="fade"
-        onRequestClose={() => setShowPinSetupModal(false)}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!savingPin) setShowPinSetupModal(false);
+        }}
       >
-        <View style={styles.dialogBackdrop}>
-          <View style={styles.dialogCard}>
-            <Text style={styles.dialogTitle}>Set App Password</Text>
-            <Text style={styles.dialogSub}>Enter a 4 to 6 digit security PIN</Text>
+        <View style={styles.pinModalBackdrop}>
+          <View style={styles.pinModalCard}>
+            {/* iOS Glass Handle */}
+            <View style={styles.pinModalHandle} />
 
-            <TextInput
-              style={styles.textInput}
-              value={pinInput}
-              onChangeText={setPinInput}
-              placeholder="Enter PIN (4-6 digits)"
-              placeholderTextColor="#94A3B8"
-              keyboardType="number-pad"
-              maxLength={6}
-              secureTextEntry
-            />
-
-            <TextInput
-              style={[styles.textInput, { marginTop: spacing.sm }]}
-              value={pinConfirmInput}
-              onChangeText={setPinConfirmInput}
-              placeholder="Confirm PIN"
-              placeholderTextColor="#94A3B8"
-              keyboardType="number-pad"
-              maxLength={6}
-              secureTextEntry
-            />
-
-            <View style={styles.dialogActionsRow}>
+            {/* Top header row with close button */}
+            <View style={styles.pinModalHeader}>
+              <Text style={styles.pinModalTitle}>
+                {pinStep === 'enter' ? 'Set 4-Digit PIN' : 'Confirm 4-Digit PIN'}
+              </Text>
               <TouchableOpacity
-                style={styles.dialogCancelBtn}
                 onPress={() => setShowPinSetupModal(false)}
                 disabled={savingPin}
+                style={styles.pinModalCloseBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close PIN Setup"
               >
-                <Text style={styles.dialogCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.dialogConfirmBtn, savingPin && { opacity: 0.6 }]}
-                onPress={handleSavePin}
-                disabled={savingPin}
-              >
-                {savingPin ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.dialogConfirmText}>Save PIN</Text>
-                )}
+                <AppIcon name="X" size={16} color="#64748B" />
               </TouchableOpacity>
             </View>
+
+            <Text style={styles.pinModalSub}>
+              {pinStep === 'enter'
+                ? 'Create a 4-digit PIN to lock and protect Artha.'
+                : 'Re-enter your 4-digit PIN to confirm.'}
+            </Text>
+
+            {pinErrorMsg ? (
+              <View style={styles.pinErrorBanner}>
+                <Text style={styles.pinErrorText}>{pinErrorMsg}</Text>
+              </View>
+            ) : null}
+
+            {/* 4 Animated PIN Dots with Shake on error */}
+            <Animated.View
+              style={[
+                styles.pinDotsRow,
+                { transform: [{ translateX: pinShakeAnim }] },
+              ]}
+            >
+              {Array.from({ length: 4 }).map((_, index) => {
+                const isFilled = index < pinCurrent.length;
+                return (
+                  <Animated.View
+                    key={index}
+                    style={[
+                      styles.pinDot,
+                      isFilled && styles.pinDotFilled,
+                      { transform: [{ scale: pinDotAnims[index] }] },
+                    ]}
+                  />
+                );
+              })}
+            </Animated.View>
+
+            {/* Same Numeric Keypad UI as AppLockScreen */}
+            <View style={styles.pinKeypadGrid}>
+              {PIN_KEYPAD_ROWS.map((row, rIdx) => (
+                <View key={rIdx} style={styles.pinKeypadRow}>
+                  {row.map((key, cIdx) =>
+                    key === '' ? (
+                      <View key={`spacer-${cIdx}`} style={styles.pinKeypadKeySpacer} />
+                    ) : (
+                      <TouchableOpacity
+                        key={key}
+                        activeOpacity={0.4}
+                        style={styles.pinKeypadKey}
+                        disabled={savingPin}
+                        onPress={() => handlePinDigitPress(key)}
+                        testID={`pin-setup-key-${key}`}
+                      >
+                        <Text style={styles.pinKeypadKeyText}>
+                          {key === 'DEL' ? '⌫' : key}
+                        </Text>
+                      </TouchableOpacity>
+                    ),
+                  )}
+                </View>
+              ))}
+            </View>
+
+            {savingPin ? (
+              <View style={styles.pinSavingIndicator}>
+                <ActivityIndicator size="small" color={isDark ? '#F58A07' : colors.navyPrimary} />
+                <Text style={styles.pinSavingText}>Saving PIN…</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Sub-Modal: Confirm current PIN before removing App Lock */}
+      <Modal
+        visible={showPinDisableModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          if (!disablingPin) setShowPinDisableModal(false);
+        }}
+      >
+        <View style={styles.pinModalBackdrop}>
+          <View style={styles.pinModalCard}>
+            {/* iOS Glass Handle */}
+            <View style={styles.pinModalHandle} />
+
+            <View style={styles.pinModalHeader}>
+              <Text style={styles.pinModalTitle}>Enter Current PIN</Text>
+              <TouchableOpacity
+                onPress={() => setShowPinDisableModal(false)}
+                disabled={disablingPin}
+                style={styles.pinModalCloseBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <AppIcon name="X" size={16} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.pinModalSub}>
+              Confirm your current PIN to remove App Lock.
+            </Text>
+
+            {pinDisableError ? (
+              <View style={styles.pinErrorBanner}>
+                <Text style={styles.pinErrorText}>{pinDisableError}</Text>
+              </View>
+            ) : null}
+
+            <Animated.View
+              style={[
+                styles.pinDotsRow,
+                { transform: [{ translateX: pinShakeAnim }] },
+              ]}
+            >
+              {Array.from({ length: 4 }).map((_, index) => {
+                const isFilled = index < pinDisableCurrent.length;
+                return (
+                  <Animated.View
+                    key={index}
+                    style={[
+                      styles.pinDot,
+                      isFilled && styles.pinDotFilled,
+                      { transform: [{ scale: pinDotAnims[index] }] },
+                    ]}
+                  />
+                );
+              })}
+            </Animated.View>
+
+            <View style={styles.pinKeypadGrid}>
+              {PIN_KEYPAD_ROWS.map((row, rIdx) => (
+                <View key={rIdx} style={styles.pinKeypadRow}>
+                  {row.map((key, cIdx) =>
+                    key === '' ? (
+                      <View key={`spacer-${cIdx}`} style={styles.pinKeypadKeySpacer} />
+                    ) : (
+                      <TouchableOpacity
+                        key={key}
+                        activeOpacity={0.4}
+                        style={styles.pinKeypadKey}
+                        disabled={disablingPin}
+                        onPress={() => handlePinDisableDigitPress(key)}
+                        testID={`pin-disable-key-${key}`}
+                      >
+                        <Text style={styles.pinKeypadKeyText}>
+                          {key === 'DEL' ? '⌫' : key}
+                        </Text>
+                      </TouchableOpacity>
+                    ),
+                  )}
+                </View>
+              ))}
+            </View>
+
+            {disablingPin ? (
+              <View style={styles.pinSavingIndicator}>
+                <ActivityIndicator size="small" color={isDark ? '#F58A07' : colors.navyPrimary} />
+                <Text style={styles.pinSavingText}>Removing App Lock…</Text>
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -1601,7 +1999,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
           {/* Loading state */}
           {sessionsLoading && (
             <View style={styles.sessionsLoadingBox}>
-              <ActivityIndicator size="small" color={colors.navyPrimary} />
+              <ActivityIndicator size="small" color={isDark ? '#F58A07' : colors.navyPrimary} />
               <Text style={styles.sessionsLoadingText}>Loading verified sessions…</Text>
             </View>
           )}
@@ -1629,15 +2027,15 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                         ) === 'phone'
                           ? 'Smartphone'
                           : platformIcon(
-                              currentSession.platform,
-                              currentSession.deviceType,
-                              currentSession.deviceName,
-                            ) === 'tablet'
+                            currentSession.platform,
+                            currentSession.deviceType,
+                            currentSession.deviceName,
+                          ) === 'tablet'
                             ? 'Tablet'
                             : 'Laptop'
                       }
                       size={20}
-                      color={colors.navyDeep}
+                      color={isDark ? '#FFFFFF' : colors.navyDeep}
                     />
                   </View>
                   <View style={styles.sessionMeta}>
@@ -1714,7 +2112,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                           <AppIcon
                             name={iconName}
                             size={18}
-                            color={colors.navyPrimary}
+                            color={isDark ? '#FFFFFF' : colors.navyPrimary}
                           />
                         </View>
                         <View style={styles.sessionMeta}>
@@ -1845,7 +2243,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
           <View style={styles.passwordChoiceDialog}>
             <View style={styles.passwordChoiceHeader}>
               <View style={styles.passwordChoiceIcon}>
-                <AppIcon name="Shield" size={24} color={colors.navyPrimary} />
+                <AppIcon name="Shield" size={24} color={isDark ? '#F58A07' : colors.navyPrimary} />
               </View>
               <Text style={styles.passwordChoiceTitle}>Update Your Password</Text>
               <Text style={styles.passwordChoiceSubtitle}>
@@ -1863,7 +2261,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                 }}
               >
                 <View style={styles.passwordOptionIconCircle}>
-                  <AppIcon name="Key" size={18} color={colors.navyDeep} />
+                  <AppIcon name="Key" size={18} color={isDark ? '#FFFFFF' : colors.navyDeep} />
                 </View>
                 <View style={styles.passwordOptionInfo}>
                   <Text style={styles.passwordOptionTitle}>I know my current password</Text>
@@ -1881,7 +2279,7 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
                 }}
               >
                 <View style={styles.passwordOptionIconCircle}>
-                  <AppIcon name="Mail" size={18} color={colors.navyDeep} />
+                  <AppIcon name="Mail" size={18} color={isDark ? '#FFFFFF' : colors.navyDeep} />
                 </View>
                 <View style={styles.passwordOptionInfo}>
                   <Text style={styles.passwordOptionTitle}>I forgot my password</Text>
@@ -2130,22 +2528,53 @@ export const AccountScreen: React.FC<AccountScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (themeColors: typeof colors, isDark: boolean) =>
+  StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#F2F3F7',
+    backgroundColor: isDark ? '#000000' : '#F2F3F7',
   },
-  headerBar: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 10,
-    backgroundColor: '#F2F3F7',
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingTop: 4,
+  },
+  headerCaption: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: isDark ? '#A1A1AA' : themeColors.textSecondary,
+    letterSpacing: 1.1,
+    marginBottom: 3,
   },
   headerTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    letterSpacing: -0.5,
+    fontSize: 28,
+    fontWeight: '900',
+    color: isDark ? '#FFFFFF' : '#0F172A',
+    letterSpacing: -0.6,
+  },
+  statusPill: {
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: isDark ? '#FFFFFF' : '#0F172A',
   },
   scrollArea: {
     flex: 1,
@@ -2159,20 +2588,20 @@ const styles = StyleSheet.create({
   profileCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 20,
     padding: 16,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     position: 'relative',
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   profileAvatarBox: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: colors.navyPrimary,
+    backgroundColor: isDark ? '#F58A07' : colors.navyPrimary,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 14,
@@ -2186,7 +2615,7 @@ const styles = StyleSheet.create({
   profileAvatarText: {
     fontSize: 19,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: isDark ? '#000000' : '#FFFFFF',
   },
   profileMetaWrap: {
     flex: 1,
@@ -2201,7 +2630,7 @@ const styles = StyleSheet.create({
   profileNameText: {
     fontSize: 17,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     letterSpacing: -0.3,
   },
   verifiedBadgePill: {
@@ -2220,7 +2649,7 @@ const styles = StyleSheet.create({
   },
   profileEmailText: {
     fontSize: 13,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
     fontWeight: '500',
   },
   profileEditPencilBtn: {
@@ -2230,12 +2659,12 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: isDark ? '#000000' : '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   // Section Wrap
   sectionWrap: {
@@ -2244,19 +2673,19 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginBottom: 8,
     paddingLeft: 4,
   },
   cardGroup: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     overflow: 'hidden',
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   rowItem: {
     flexDirection: 'row',
@@ -2268,7 +2697,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -2280,39 +2711,52 @@ const styles = StyleSheet.create({
   rowTitle: {
     fontSize: 14.5,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   rowSubtitle: {
     fontSize: 12,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
     marginTop: 2,
   },
   divider: {
     height: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
     marginLeft: 64,
   },
-  // Glassy Theme Button (Clear-all style)
-  glassyThemeBtn: {
+  // 2-Option Theme Segment Control (Light & Dark)
+  themeSegmentTrack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderRadius: 20,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+  },
+  themeSegmentBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.75)',
-    borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.90)',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
   },
-  glassyThemeBtnText: {
-    fontSize: 12.5,
+  themeSegmentBtnActive: {
+    backgroundColor: isDark ? '#F58A07' : '#084887',
+    shadowColor: isDark ? '#F58A07' : '#084887',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: isDark ? 0 : 0.15,
+    shadowRadius: 3,
+    elevation: isDark ? 0 : 2,
+  },
+  themeSegmentText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: isDark ? 'rgba(255, 255, 255, 0.64)' : '#64748B',
+  },
+  themeSegmentTextActive: {
     fontWeight: '700',
-    color: colors.navyPrimary,
+    color: isDark ? '#000000' : '#FFFFFF',
   },
   // Bottom Log Out
   bottomActionsWrap: {
@@ -2324,12 +2768,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : 'rgba(239, 68, 68, 0.25)',
     borderRadius: 16,
     paddingVertical: 14,
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   logoutBtnText: {
     fontSize: 14.5,
@@ -2351,7 +2795,7 @@ const styles = StyleSheet.create({
   sheetSectionTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#64748B',
+    color: isDark ? '#FFFFFF' : '#64748B',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginBottom: 10,
@@ -2362,18 +2806,18 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 6,
   },
   textInput: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#CBD5E1',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 14,
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     fontWeight: '600',
   },
   inputError: {
@@ -2389,9 +2833,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: isDark ? '#000000' : '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -2399,13 +2843,15 @@ const styles = StyleSheet.create({
   readOnlyText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#64748B',
+    color: isDark ? '#FFFFFF' : '#64748B',
   },
   socialLinkedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#E0F2FE',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : '#E0F2FE',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
@@ -2413,47 +2859,47 @@ const styles = StyleSheet.create({
   socialLinkedBadgeText: {
     fontSize: 10.5,
     fontWeight: '700',
-    color: colors.textSecondary,
+    color: isDark ? '#FFFFFF' : colors.textSecondary,
   },
   actionPillBtn: {
-    backgroundColor: colors.navyPrimary,
+    backgroundColor: isDark ? '#F58A07' : themeColors.navyPrimary,
     borderRadius: 16,
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 10,
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   actionPillBtnText: {
     fontSize: 14.5,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: isDark ? '#000000' : '#FFFFFF',
   },
   // OTP Card
   otpVerifyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 16,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     alignItems: 'center',
   },
   otpCardTitle: {
     fontSize: 16,
     fontWeight: '800',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 4,
   },
   otpCardSub: {
     fontSize: 12.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     textAlign: 'center',
     marginBottom: 16,
   },
   otpInput: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: isDark ? '#000000' : '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#CBD5E1',
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 16,
@@ -2461,7 +2907,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     letterSpacing: 6,
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     width: '80%',
     marginBottom: 14,
   },
@@ -2472,7 +2918,7 @@ const styles = StyleSheet.create({
   cancelLinkText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
   },
   // Account Settings Dropdowns
   dropdownBlock: {
@@ -2481,40 +2927,40 @@ const styles = StyleSheet.create({
   settingLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 8,
   },
   dropdownTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#CBD5E1',
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 13,
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   dropdownTriggerActive: {
-    borderColor: colors.navyPrimary,
+    borderColor: isDark ? '#F58A07' : colors.navyPrimary,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
   },
   dropdownSelectedText: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   dropdownMenu: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
     borderTopWidth: 0,
-    borderColor: colors.navyPrimary,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : themeColors.navyPrimary,
     borderBottomLeftRadius: 14,
     borderBottomRightRadius: 14,
     overflow: 'hidden',
-    ...shadows.subtle,
+    ...(isDark ? {} : shadows.subtle),
   },
   dropdownItem: {
     flexDirection: 'row',
@@ -2523,38 +2969,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
   },
   dropdownItemActive: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F8FAFC',
   },
   dropdownItemText: {
     fontSize: 13.5,
     fontWeight: '500',
-    color: '#475569',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#475569',
   },
   dropdownItemTextActive: {
     fontWeight: '700',
-    color: colors.navyPrimary,
+    color: isDark ? '#F58A07' : themeColors.navyPrimary,
   },
   // Advanced Features Section
   advancedSection: {
     marginTop: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
   advancedSectionHeader: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#94A3B8',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#94A3B8',
     letterSpacing: 0.8,
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
   },
   advancedRow: {
     flexDirection: 'row',
@@ -2562,7 +3008,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
   },
   advancedRowLeft: {
     flexDirection: 'row',
@@ -2572,16 +3018,16 @@ const styles = StyleSheet.create({
   advancedRowText: {
     fontSize: 13.5,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   // Security Modal
   securityMethodCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     borderRadius: 14,
     padding: 14,
   },
@@ -2594,18 +3040,20 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
   methodCardTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   methodCardEmail: {
     fontSize: 12,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginTop: 1,
   },
   connectedBadge: {
@@ -2623,35 +3071,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#F0F9FF',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#F0F9FF',
     borderWidth: 1,
-    borderColor: '#BAE6FD',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#BAE6FD',
     borderRadius: 12,
     padding: 14,
   },
   socialNoticeText: {
     flex: 1,
     fontSize: 12.5,
-    color: '#0369A1',
+    color: isDark ? '#FFFFFF' : '#0369A1',
     lineHeight: 18,
     fontWeight: '500',
   },
   passwordCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     padding: 14,
   },
   passwordCardTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 4,
   },
   passwordCardSub: {
     fontSize: 12,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginBottom: 12,
   },
   forgotPassBtn: {
@@ -2662,14 +3110,14 @@ const styles = StyleSheet.create({
   forgotPassText: {
     fontSize: 12.5,
     fontWeight: '600',
-    color: colors.navyPrimary,
+    color: isDark ? '#F58A07' : themeColors.navyPrimary,
   },
   // Notifications Toggles
   cleanToggleList: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     overflow: 'hidden',
   },
   cleanToggleRow: {
@@ -2682,14 +3130,14 @@ const styles = StyleSheet.create({
   cleanToggleTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   // App Lock Clean
   cleanCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     overflow: 'hidden',
   },
   cleanSwitchItem: {
@@ -2707,12 +3155,12 @@ const styles = StyleSheet.create({
   cleanSwitchItemLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   biometricUnavailableHint: {
     fontSize: 12,
     lineHeight: 17,
-    color: colors.textMuted,
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : colors.textMuted,
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
@@ -2736,27 +3184,27 @@ const styles = StyleSheet.create({
   sessionSectionTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#64748B',
+    color: isDark ? '#FFFFFF' : '#64748B',
     letterSpacing: 0.8,
     marginBottom: 8,
     paddingHorizontal: 2,
   },
   sessionCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     padding: 14,
     marginBottom: 10,
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
+    shadowOpacity: isDark ? 0 : 0.04,
     shadowRadius: 3,
-    elevation: 1,
+    elevation: isDark ? 0 : 1,
   },
   currentSessionCard: {
-    borderColor: 'rgba(8, 72, 135, 0.22)',
-    backgroundColor: '#FAFCFF',
+    borderColor: isDark ? '#F58A07' : 'rgba(8, 72, 135, 0.22)',
+    backgroundColor: isDark ? '#000000' : '#FAFCFF',
   },
   sessionTopRow: {
     flexDirection: 'row',
@@ -2766,13 +3214,15 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 10,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
   currentSessionIconBox: {
-    backgroundColor: '#E0F2FE',
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : '#E0F2FE',
   },
   sessionMeta: {
     flex: 1,
@@ -2786,7 +3236,7 @@ const styles = StyleSheet.create({
   sessionDeviceName: {
     fontSize: 14,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   thisDeviceBadge: {
     flexDirection: 'row',
@@ -2812,24 +3262,24 @@ const styles = StyleSheet.create({
   sessionLocationText: {
     fontSize: 12.5,
     fontWeight: '600',
-    color: '#334155',
+    color: isDark ? '#FFFFFF' : '#334155',
     marginTop: 2,
   },
   sessionOperatingSystemText: {
     fontSize: 11.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginTop: 1,
   },
   sessionTimeText: {
     fontSize: 11.5,
-    color: '#94A3B8',
+    color: isDark ? 'rgba(255, 255, 255, 0.7)' : '#94A3B8',
     marginTop: 1,
   },
   currentDeviceActionRow: {
     marginTop: 10,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(8, 72, 135, 0.08)',
+    borderTopColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(8, 72, 135, 0.08)',
     flexDirection: 'row',
     justifyContent: 'flex-end',
   },
@@ -2843,13 +3293,13 @@ const styles = StyleSheet.create({
   currentDeviceSignOutText: {
     fontSize: 11.5,
     fontWeight: '600',
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
   },
   allSecureBox: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: isDark ? '#000000' : '#F0FDF4',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#BBF7D0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#BBF7D0',
     padding: 16,
     alignItems: 'center',
     gap: 6,
@@ -2858,7 +3308,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#DCFCE7',
+    backgroundColor: isDark ? 'rgba(16, 185, 129, 0.15)' : '#DCFCE7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 2,
@@ -2866,18 +3316,18 @@ const styles = StyleSheet.create({
   allSecureTitle: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: '#166534',
+    color: isDark ? '#FFFFFF' : '#166534',
   },
   allSecureSub: {
     fontSize: 12,
-    color: '#15803D',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#15803D',
     textAlign: 'center',
   },
   otherSessionActionsRow: {
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+    borderTopColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#F1F5F9',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -2893,21 +3343,21 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#FDE68A',
-    backgroundColor: '#FFFBEB',
+    borderColor: isDark ? 'rgba(245, 138, 7, 0.4)' : '#FDE68A',
+    backgroundColor: isDark ? '#000000' : '#FFFBEB',
   },
   unknownDeviceBtnText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#B45309',
+    color: isDark ? '#F58A07' : '#B45309',
   },
   removeSessionBtn: {
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FECACA',
+    backgroundColor: isDark ? '#000000' : '#FEF2F2',
     minWidth: 70,
     alignItems: 'center',
   },
@@ -2923,7 +3373,7 @@ const styles = StyleSheet.create({
   },
   sessionsLoadingText: {
     fontSize: 13,
-    color: '#94A3B8',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#94A3B8',
   },
   revokeAllBtn: {
     flexDirection: 'row',
@@ -2931,8 +3381,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     borderWidth: 1,
-    borderColor: '#FCA5A5',
-    backgroundColor: '#FFF5F5',
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FCA5A5',
+    backgroundColor: isDark ? '#000000' : '#FFF5F5',
     borderRadius: 14,
     paddingVertical: 12,
     marginTop: 8,
@@ -2947,14 +3397,16 @@ const styles = StyleSheet.create({
   passwordChoiceDialog: {
     width: '100%',
     maxWidth: 380,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 20,
     padding: 20,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.15,
+    shadowOpacity: isDark ? 0 : 0.15,
     shadowRadius: 24,
-    elevation: 24,
+    elevation: isDark ? 0 : 24,
   },
   passwordChoiceHeader: {
     alignItems: 'center',
@@ -2964,7 +3416,9 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 10,
@@ -2972,12 +3426,12 @@ const styles = StyleSheet.create({
   passwordChoiceTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     textAlign: 'center',
   },
   passwordChoiceSubtitle: {
     fontSize: 12.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     textAlign: 'center',
     marginTop: 4,
     lineHeight: 18,
@@ -2990,10 +3444,10 @@ const styles = StyleSheet.create({
   passwordOptionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: isDark ? '#000000' : '#F8FAFC',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     padding: 12,
     gap: 12,
   },
@@ -3001,9 +3455,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3013,11 +3467,11 @@ const styles = StyleSheet.create({
   passwordOptionTitle: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   passwordOptionDesc: {
     fontSize: 11.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginTop: 2,
   },
   passwordChoiceCancelBtn: {
@@ -3027,26 +3481,26 @@ const styles = StyleSheet.create({
   passwordChoiceCancelText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#64748B',
+    color: isDark ? '#FFFFFF' : '#64748B',
   },
   // FAQ
   faqCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     padding: 14,
     marginBottom: 10,
   },
   faqQuestion: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 4,
   },
   faqAnswer: {
     fontSize: 12.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     lineHeight: 18,
   },
   // Blocked Users
@@ -3056,7 +3510,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   blockAddBtn: {
-    backgroundColor: colors.navyPrimary,
+    backgroundColor: isDark ? '#F58A07' : colors.navyPrimary,
     borderRadius: 12,
     paddingHorizontal: 16,
     justifyContent: 'center',
@@ -3065,7 +3519,7 @@ const styles = StyleSheet.create({
   blockAddBtnText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: isDark ? '#000000' : '#FFFFFF',
   },
   emptyBlockedBox: {
     alignItems: 'center',
@@ -3075,22 +3529,22 @@ const styles = StyleSheet.create({
   emptyBlockedTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginTop: 10,
   },
   emptyBlockedSub: {
     fontSize: 12.5,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginTop: 2,
   },
   blockedUserRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginBottom: 8,
@@ -3098,7 +3552,7 @@ const styles = StyleSheet.create({
   blockedUserEmail: {
     fontSize: 13.5,
     fontWeight: '600',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   unblockText: {
     fontSize: 12.5,
@@ -3107,9 +3561,9 @@ const styles = StyleSheet.create({
   },
   // Delete Account Sheet
   deleteWarningCard: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: isDark ? '#000000' : '#FEF2F2',
     borderWidth: 1,
-    borderColor: '#FECACA',
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FECACA',
     borderRadius: 12,
     padding: 14,
     marginBottom: 16,
@@ -3117,17 +3571,17 @@ const styles = StyleSheet.create({
   deleteWarningTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#DC2626',
+    color: '#EF4444',
     marginBottom: 4,
   },
   deleteWarningBody: {
     fontSize: 12.5,
-    color: '#991B1B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#991B1B',
     lineHeight: 18,
   },
   deleteConfirmPrompt: {
     fontSize: 13,
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 4,
   },
   dangerPillBtn: {
@@ -3145,9 +3599,36 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   // Dialog (PIN & Logout)
-  dialogBackdrop: {
+  dialogOverlay: {
     flex: 1,
     backgroundColor: 'rgba(1, 29, 40, 0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  dialogBox: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+    ...(isDark ? {} : shadows.card),
+  },
+  dialogSubtitle: {
+    fontSize: 13,
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
+    marginBottom: 16,
+  },
+  dialogActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  dialogBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
@@ -3155,20 +3636,22 @@ const styles = StyleSheet.create({
   dialogCard: {
     width: '100%',
     maxWidth: 340,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
     borderRadius: 20,
     padding: 20,
-    ...shadows.card,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+    ...(isDark ? {} : shadows.card),
   },
   dialogTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
     marginBottom: 4,
   },
   dialogSub: {
     fontSize: 13,
-    color: '#64748B',
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
     marginBottom: 16,
   },
   dialogActionsRow: {
@@ -3180,25 +3663,27 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 11,
     borderRadius: 12,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
     alignItems: 'center',
   },
   dialogCancelText: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
   },
   dialogConfirmBtn: {
     flex: 1,
     paddingVertical: 11,
     borderRadius: 12,
-    backgroundColor: colors.navyPrimary,
+    backgroundColor: isDark ? '#F58A07' : colors.navyPrimary,
     alignItems: 'center',
   },
   dialogConfirmText: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: isDark ? '#000000' : '#FFFFFF',
   },
   dialogLogoutConfirmBtn: {
     flex: 1,
@@ -3225,4 +3710,146 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-});
+  // Keypad PIN Modal Styles (Solid Clean Bottom-Sheet)
+  pinModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+  },
+  pinModalCard: {
+    width: '100%',
+    maxWidth: 350,
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : '#E2E8F0',
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: isDark ? 0 : 0.15,
+    shadowRadius: 20,
+    elevation: isDark ? 0 : 10,
+  },
+  pinModalHandle: {
+    width: 38,
+    height: 3.5,
+    borderRadius: 3,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.25)' : '#CBD5E1',
+    marginBottom: 14,
+    alignSelf: 'center',
+  },
+  pinModalHeader: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  pinModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: isDark ? '#FFFFFF' : themeColors.textPrimary,
+    letterSpacing: -0.3,
+  },
+  pinModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: isDark ? '#000000' : '#F1F5F9',
+    borderWidth: isDark ? 1 : 0,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinModalSub: {
+    fontSize: 13,
+    color: isDark ? 'rgba(255, 255, 255, 0.85)' : '#64748B',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  pinErrorBanner: {
+    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#FEF2F2',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(239, 68, 68, 0.35)' : '#FECACA',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    width: '100%',
+  },
+  pinErrorText: {
+    color: '#DC2626',
+    fontSize: 12.5,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  pinDotsRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 26,
+  },
+  pinDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.3)' : '#084887',
+    backgroundColor: 'transparent',
+    opacity: 0.35,
+  },
+  pinDotFilled: {
+    backgroundColor: '#F58A07',
+    borderColor: '#F58A07',
+    opacity: 1,
+  },
+  pinKeypadGrid: {
+    width: '100%',
+    maxWidth: 284,
+  },
+  pinKeypadRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  pinKeypadKey: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: isDark ? '#000000' : '#FFFFFF',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(8, 72, 135, 0.12)',
+    shadowColor: '#031D44',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: isDark ? 0 : 0.04,
+    shadowRadius: 4,
+    elevation: isDark ? 0 : 1,
+  },
+  pinKeypadKeySpacer: {
+    width: 68,
+    height: 68,
+  },
+  pinKeypadKeyText: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: isDark ? '#FFFFFF' : '#031D44',
+  },
+  pinSavingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  pinSavingText: {
+    fontSize: 13,
+    color: isDark ? '#FFFFFF' : '#475569',
+    fontWeight: '600',
+  },
+  });

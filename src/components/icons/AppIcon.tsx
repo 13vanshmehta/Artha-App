@@ -58,6 +58,8 @@ import {
   BarChart3,
   Flag,
   MoreVertical,
+  Sun,
+  Moon,
   LucideProps,
 } from 'lucide-react-native';
 
@@ -118,7 +120,9 @@ export type AppIconName =
   | 'HelpCircle'
   | 'BarChart3'
   | 'Flag'
-  | 'MoreVertical';
+  | 'MoreVertical'
+  | 'Sun'
+  | 'Moon';
 
 const ICON_MAP: Record<AppIconName, React.FC<LucideProps>> = {
   Home,
@@ -178,6 +182,8 @@ const ICON_MAP: Record<AppIconName, React.FC<LucideProps>> = {
   BarChart3,
   Flag,
   MoreVertical,
+  Sun,
+  Moon,
 };
 
 export interface AppIconProps {

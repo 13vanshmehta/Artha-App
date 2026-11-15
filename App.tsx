@@ -17,15 +17,16 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { TrackerScreen } from './src/screens/TrackerScreen';
 import { GroupsScreen } from './src/screens/GroupsScreen';
 import { AccountScreen } from './src/screens/AccountScreen';
-import { SplashScreen } from './src/components/splash/SplashScreen';
 import { ToastHost } from './src/components/common/ToastHost';
 import { AlertHost } from './src/components/common/AlertHost';
 import { ToastProvider, toast } from './src/context/ToastContext';
 import { AlertProvider } from './src/context/AlertContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { AuthFlowNavigator } from './src/screens/auth/AuthFlowNavigator';
 import { AppLockScreen } from './src/screens/auth/AppLockScreen';
 import { BiometricOnboardingScreen } from './src/screens/auth/BiometricOnboardingScreen';
+import { SplashScreen } from './src/components/splash/SplashScreen';
 import { TransactionModal } from './src/components/finance/TransactionModal';
 import { mockTransactions, MockTransaction } from './src/mock';
 
@@ -35,54 +36,99 @@ function AppContent() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { status, user } = useAuth();
+  const { theme, isDark, colors } = useTheme();
 
+  // Default launch screen: brand lockup only, no buttons. Shown until the
+  // local auth check resolves and its own minimum duration has elapsed.
   const [showSplash, setShowSplash] = useState(true);
+
   const [currentTab, setCurrentTab] = useState<TabKey>('Home');
   const [isScrolling, setIsScrolling] = useState(false);
   const [expenses, setExpenses] = useState<MockTransaction[]>(mockTransactions);
 
-  // Native horizontal scroll driver for 120 FPS buttery-smooth page sliding
+  // Horizontal scroll driver
   const scrollX = useRef(new Animated.Value(0)).current;
   const scrollViewRef = useRef<any>(null);
 
   // Continuous, JS-driven page position (e.g. 1.35 = 35% of the way from tab
-  // index 1 to tab index 2). scrollX itself is updated natively (useNativeDriver:
-  // true) for 120fps page sliding, but native-driven values can't drive layout/
-  // color props (width, backgroundColor) — those require the JS thread. This
-  // value is kept in sync with scrollX on every scroll tick below so the tab
-  // bar can interpolate its pill position live, in real time with the finger.
+  // index 1 to tab index 2) driving the tab bar pill and label expansion live with the finger.
   const scrollProgress = useRef(new Animated.Value(0)).current;
 
-  // Ref mirror of currentTab to avoid stale closure inside the scrollX listener
+  // Ref mirror of currentTab to avoid stale closures
   const currentTabRef = useRef<TabKey>('Home');
 
-  // Real-time swipe sync: mirror the native scroll position into scrollProgress
-  // every tick (driving the live tab-bar pill), and flip the discrete currentTab
-  // as soon as the scroll crosses each page's midpoint (driving icon/label state).
-  useEffect(() => {
-    const listenerId = scrollX.addListener(({ value }) => {
-      if (!windowWidth) return;
-      const rawIndex = value / windowWidth;
-      scrollProgress.setValue(
-        Math.min(Math.max(rawIndex, 0), TAB_ORDER.length - 1),
-      );
+  // Tracks if scroll was triggered programmatically (via bottom tab tap)
+  const isProgrammaticScrollRef = useRef(false);
 
-      // Snap to the nearest page index as soon as the scroll crosses the midpoint
-      const idx = Math.min(
-        Math.max(Math.round(rawIndex), 0),
+  // Status and user tracker to cleanly detect login/logout/user transitions
+  const prevStatusRef = useRef<string>(status);
+  const prevUserIdRef = useRef<string | null | undefined>(user?.id);
+
+  // Synchronize state on authentication / logout / user switch:
+  // Reset tab and scroll positions so upon login or logout the app is ALWAYS cleanly on Home.
+  useEffect(() => {
+    const statusChanged = prevStatusRef.current !== status;
+    const isNewUser = prevUserIdRef.current !== user?.id;
+    prevStatusRef.current = status;
+    prevUserIdRef.current = user?.id;
+
+    if (statusChanged || isNewUser) {
+      // Whenever leaving or entering authenticated state, reset to Home tab
+      setCurrentTab('Home');
+      currentTabRef.current = 'Home';
+      isProgrammaticScrollRef.current = false;
+      scrollX.setValue(0);
+      scrollProgress.setValue(0);
+
+      if (status === 'authenticated') {
+        requestAnimationFrame(() => {
+          scrollViewRef.current?.scrollTo({ x: 0, animated: false });
+        });
+      }
+    }
+  }, [status, user?.id, scrollX, scrollProgress]);
+
+  // Real-time synchronization from scroll offset to tab index & progress
+  const syncScrollState = useCallback(
+    (offsetX: number) => {
+      if (windowWidth <= 0) return;
+      const rawIndex = offsetX / windowWidth;
+      const clampedIndex = Math.min(
+        Math.max(rawIndex, 0),
         TAB_ORDER.length - 1,
       );
-      const tab = TAB_ORDER[idx];
-      if (tab && tab !== currentTabRef.current) {
-        currentTabRef.current = tab;
-        setCurrentTab(tab);
-      }
-    });
+      // Continuous position driving live tab-bar pill translation & label expansion
+      scrollProgress.setValue(clampedIndex);
 
-    return () => {
-      scrollX.removeListener(listenerId);
-    };
-  }, [scrollX, scrollProgress, windowWidth]);
+      // Discrete page index driving icon active state as scroll passes midpoint
+      if (!isProgrammaticScrollRef.current) {
+        const targetIdx = Math.min(
+          Math.max(Math.round(rawIndex), 0),
+          TAB_ORDER.length - 1,
+        );
+        const targetTab = TAB_ORDER[targetIdx];
+        if (targetTab && targetTab !== currentTabRef.current) {
+          currentTabRef.current = targetTab;
+          setCurrentTab(targetTab);
+        }
+      }
+    },
+    [windowWidth, scrollProgress],
+  );
+
+  // Live scroll listener for buttery-smooth 60/120 FPS swipe sync
+  const handleScroll = Animated.event(
+    [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+    {
+      useNativeDriver: false,
+      listener: (e: any) => {
+        const offsetX = e?.nativeEvent?.contentOffset?.x;
+        if (typeof offsetX === 'number') {
+          syncScrollState(offsetX);
+        }
+      },
+    },
+  );
 
   // Synchronize bottom tab tap with smooth native scroll
   const handleSelectTab = useCallback(
@@ -92,6 +138,7 @@ function AppContent() {
       currentTabRef.current = tab;
       const targetIndex = TAB_ORDER.indexOf(tab);
       if (targetIndex !== -1) {
+        isProgrammaticScrollRef.current = true;
         scrollViewRef.current?.scrollTo({
           x: targetIndex * windowWidth,
           animated: true,
@@ -105,10 +152,6 @@ function AppContent() {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalDefaultType, setModalDefaultType] = useState<'expense' | 'income'>('expense');
   const [editingTransaction, setEditingTransaction] = useState<MockTransaction | null>(null);
-
-  const handleReplaySplash = () => {
-    setShowSplash(true);
-  };
 
   const handleOpenAdd = (type: 'expense' | 'income' = 'expense') => {
     setEditingTransaction(null);
@@ -182,42 +225,43 @@ function AppContent() {
     toast.info('Transaction removed.', 'Deleted');
   };
 
-  // 1. Unauthenticated or verifying email -> Show Auth Flow Navigator
-  if (status === 'unauthenticated' || status === 'pending_verification') {
+  // 0. Default launch splash — logo + wordmark + tagline only, no buttons.
+  if (showSplash) {
     return (
-      <View style={styles.rootContainer}>
-        <StatusBar barStyle="dark-content" />
-        <AuthFlowNavigator isSplashActive={showSplash} />
-        <ToastHost />
-        <AlertHost />
-        {showSplash && (
-          <SplashScreen
-            isReady={status !== 'initializing'}
-            skipFadeOut={true}
-            onFinish={() => setShowSplash(false)}
-            durationMs={1500}
-          />
-        )}
+      <View style={[styles.rootContainer, { backgroundColor: isDark ? '#000000' : '#F7F5FB' }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <SplashScreen onFinish={() => setShowSplash(false)} />
       </View>
     );
   }
 
-  // 2. Locked -> Biometric or PIN Unlock Screen
+  // 0a. Safety net: the local auth check is normally near-instant, but if it
+  // somehow outlasts the splash's fixed duration, hold a plain branded
+  // background rather than falling through to the wrong screen.
+  if (status === 'initializing') {
+    return <View style={[styles.rootContainer, { backgroundColor: isDark ? '#000000' : '#F7F5FB' }]} />;
+  }
+
+  // 1a. Locked -> require PIN / biometric unlock before showing anything else
   if (status === 'locked') {
     return (
-      <View style={styles.rootContainer}>
-        <StatusBar barStyle="dark-content" />
+      <View style={[styles.rootContainer, isDark && { backgroundColor: '#000000' }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
         <AppLockScreen />
         <ToastHost />
         <AlertHost />
-        {showSplash && (
-          <SplashScreen
-            isReady={status !== 'initializing'}
-            skipFadeOut={true}
-            onFinish={() => setShowSplash(false)}
-            durationMs={1500}
-          />
-        )}
+      </View>
+    );
+  }
+
+  // 1. Unauthenticated or verifying email -> Show Auth Flow Navigator (Welcome Screen)
+  if (status === 'unauthenticated' || status === 'pending_verification') {
+    return (
+      <View style={[styles.rootContainer, isDark && { backgroundColor: '#000000' }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <AuthFlowNavigator />
+        <ToastHost />
+        <AlertHost />
       </View>
     );
   }
@@ -225,18 +269,11 @@ function AppContent() {
   // 3. First-time Biometric Onboarding
   if (status === 'onboarding_biometrics') {
     return (
-      <View style={styles.rootContainer}>
-        <StatusBar barStyle="dark-content" />
+      <View style={[styles.rootContainer, isDark && { backgroundColor: '#000000' }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
         <BiometricOnboardingScreen />
         <ToastHost />
         <AlertHost />
-        {showSplash && (
-          <SplashScreen
-            isReady={true}
-            onFinish={() => setShowSplash(false)}
-            durationMs={1500}
-          />
-        )}
       </View>
     );
   }
@@ -246,6 +283,7 @@ function AppContent() {
     <View
       style={[
         styles.rootContainer,
+        isDark && { backgroundColor: '#000000' },
         {
           paddingTop:
             Platform.OS === 'ios'
@@ -254,32 +292,39 @@ function AppContent() {
         },
       ]}
     >
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-      {/* 4 Primary Navigation Sections (Native Hardware-Accelerated Paging ScrollView) */}
+      {/* 4 Primary Navigation Sections (Paging ScrollView synced with bottom navbar) */}
       <Animated.ScrollView
+        key={`primary-nav-scroll-${user?.id || 'guest'}`}
         ref={scrollViewRef}
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         bounces={false}
         overScrollMode="never"
+        contentOffset={{ x: 0, y: 0 }}
         scrollEventThrottle={16}
         decelerationRate="fast"
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { x: scrollX } } }],
-          { useNativeDriver: true },
-        )}
+        onScroll={handleScroll}
         onMomentumScrollEnd={(e) => {
-          // Fallback: ensure currentTab is correct after the gesture fully settles
-          const pageIndex = Math.min(
-            Math.max(Math.round(e.nativeEvent.contentOffset.x / windowWidth), 0),
-            TAB_ORDER.length - 1,
-          );
-          const tab = TAB_ORDER[pageIndex];
-          if (tab && tab !== currentTabRef.current) {
-            currentTabRef.current = tab;
-            setCurrentTab(tab);
+          isProgrammaticScrollRef.current = false;
+          const offsetX = e?.nativeEvent?.contentOffset?.x ?? 0;
+          syncScrollState(offsetX);
+          if (windowWidth > 0) {
+            const targetIdx = Math.min(
+              Math.max(Math.round(offsetX / windowWidth), 0),
+              TAB_ORDER.length - 1,
+            );
+            const targetTab = TAB_ORDER[targetIdx];
+            if (targetTab) {
+              currentTabRef.current = targetTab;
+              setCurrentTab(targetTab);
+            }
+          }
+          const targetIndex = TAB_ORDER.indexOf(currentTabRef.current);
+          if (targetIndex !== -1) {
+            scrollProgress.setValue(targetIndex);
           }
         }}
         style={{ flex: 1, width: windowWidth }}
@@ -289,8 +334,8 @@ function AppContent() {
         <View style={{ width: windowWidth, height: '100%' }}>
           <HomeScreen
             userName={user?.displayName || 'User'}
+            userAvatarUrl={user?.avatarUrl}
             expenses={expenses}
-            onReplaySplash={handleReplaySplash}
             onScrollingChange={setIsScrolling}
             onNavigateToTab={handleSelectTab}
             onOpenAddTransaction={handleOpenAdd}
@@ -326,7 +371,7 @@ function AppContent() {
         isScrolling={isScrolling}
         scrollProgress={scrollProgress}
         pageWidth={windowWidth}
-        userAvatarUrl={user?.photoUrl}
+        userAvatarUrl={user?.avatarUrl ?? undefined}
         userName={user?.displayName}
       />
 
@@ -346,14 +391,6 @@ function AppContent() {
       {/* Global In-App Confirmation Alert Host */}
       <AlertHost />
 
-      {/* Launch & Replay Splash Screen */}
-      {showSplash && (
-        <SplashScreen
-          isReady={status !== 'initializing'}
-          onFinish={() => setShowSplash(false)}
-          durationMs={1500}
-        />
-      )}
     </View>
   );
 }
@@ -368,13 +405,15 @@ function App() {
     <SafeAreaProvider
       initialMetrics={initialWindowMetrics ?? FALLBACK_SAFE_AREA_METRICS}
     >
-      <AlertProvider>
-        <ToastProvider>
-          <AuthProvider>
-            <AppContent />
-          </AuthProvider>
-        </ToastProvider>
-      </AlertProvider>
+      <ThemeProvider>
+        <AlertProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
+          </ToastProvider>
+        </AlertProvider>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
